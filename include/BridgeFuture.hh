@@ -31,7 +31,15 @@ struct Token
 class TaskBase
 {
 public:
+	virtual ~TaskBase() = default;
 	virtual void Execute() = 0;
+};
+
+class Executor
+{
+public:
+	virtual ~Executor() = default;
+	virtual void Execute(const std::function<void()>& func) = 0;
 };
 
 class TaskScheduler
@@ -41,10 +49,39 @@ public:
 	{
 	}
 
-	Token Add(std::shared_ptr<TaskBase>&& task);
-	void Schedule(Token token);
-	
-	void Execute(std::shared_ptr<TaskBase>&& task);
+	Token Add(std::shared_ptr<TaskBase>&& task)
+	{
+		std::unique_lock<std::mutex> lock{m_task_mutex};
+		auto event = m_seq++;
+		m_tasks.emplace(event, std::move(task));
+		return {this, event};
+	}
+
+	void Schedule(Token token)
+	{
+		std::shared_ptr<TaskBase> task;
+		{
+			std::unique_lock<std::mutex> lock{m_task_mutex};
+			auto it = m_tasks.find(token.event);
+			if (it != m_tasks.end())
+			{
+				task = std::move(it->second);
+				it = m_tasks.erase(it);
+			}
+		}
+		
+		// m_task_mutex does not protect the m_executor, which is thread-safe.
+		if (task)
+			Execute(std::move(task));
+	}
+
+	void Execute(std::shared_ptr<TaskBase>&& task)
+	{
+		m_executor->Execute([task=std::move(task)]
+		{
+			task->Execute();
+		});
+	}
 
 	std::size_t Count() const
 	{
@@ -52,10 +89,10 @@ public:
 	}
 
 private:
-	std::mutex m_task_mutex;
-	
+	//! Executor is thread-safe. There is no need to protect it with a mutex.
 	std::unique_ptr<Executor> m_executor;
 	
+	std::mutex m_task_mutex;
 	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
@@ -164,45 +201,6 @@ auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Tok
 	return std::make_shared<Task<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
-class Executor
-{
-public:
-	virtual void Execute(const std::function<void()>& func) = 0;
-};
-
-inline Token TaskScheduler::Add(std::shared_ptr<TaskBase>&& task)
-{
-	auto event = m_seq++;
-
-	std::unique_lock<std::mutex> lock{m_task_mutex};
-	m_tasks.emplace(event, std::move(task));
-	return {this, event};
-}
-
-inline void TaskScheduler::Schedule(Token token)
-{
-	std::shared_ptr<TaskBase> task;
-	{
-		std::unique_lock<std::mutex> lock{m_task_mutex};
-		auto it = m_tasks.find(token.event);
-		if (it != m_tasks.end())
-		{
-			task = std::move(it->second);
-			it = m_tasks.erase(it);
-		}
-	}
-	if (task)
-		Execute(std::move(task));
-}
-
-void TaskScheduler::Execute(std::shared_ptr<TaskBase>&& task)
-{
-	m_executor->Execute([task=std::move(task)]
-	{
-		task->Execute();
-	});
-}
-
 class ThreadExecutor : public Executor
 {
 public:
@@ -243,22 +241,37 @@ public:
 	template <typename Func>
 	auto Then(Func&& continuation, TaskScheduler *host)
 	{
-		std::promise<Token> cont_token;
+		// The promise of the next continuation routine's token. It is not _THIS_ continuation
+		// routine's token. We are adding the _THIS_ continuation routine (i.e. the "continuation"
+		// argument) right here, so we knows the its token.
+		//
+		// We don't know the next continuation routine's token yet. It will be known when Then()
+		// is called with the Future returned by this function.
+		std::promise<Token> next_token;
 
-		auto result = m_shared_state.share();
-		auto task   = MakeTask(result, std::forward<Func>(continuation), cont_token.get_future());
-		auto cont   = task->Result();
+		// Prepare the continuation routine as a task. The function of the task is of course
+		// the continuation routine itself. The argument of the continuation routine is the
+		// result of the last async call, i.e. the variable referred by the m_shared_state future.
+		auto arg    = m_shared_state.share();
+		auto task   = MakeTask(arg, std::forward<Func>(continuation), next_token.get_future());
+		
+		// We also need to know the promise to return value of the continuation routine as well.
+		// It will be passed to the future returned by this function.
+		auto ret    = task->Result();
 		auto token  = host->Add(std::move(task));
 		
 		assert(token.host);
 		assert(token.host == host);
 
-		if (result.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		// "arg" is the argument of the continuation function, i.e. the result of the previous async
+		// call. If it is ready, that means the previous async call is finished. We can directly
+		// invoke the continuation function here.
+		if (arg.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
 			host->Schedule(token);
 		else
 			m_token.set_value(token);
 		
-		return MakeFuture(std::move(cont), std::move(cont_token));
+		return MakeFuture(std::move(ret), std::move(next_token));
 	}
 
 	template <typename Type>
