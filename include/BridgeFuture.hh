@@ -37,13 +37,11 @@ public:
 class TaskScheduler
 {
 public:
-	TaskScheduler(std::unique_ptr<Executor>&& exe) : m_executor{std::move(exe)}
+	explicit TaskScheduler(std::unique_ptr<Executor>&& exe) : m_executor{std::move(exe)}
 	{
 	}
 
-	template <typename T, typename Function>
-	auto Add(const std::shared_future<T>& val, Function&& func, Token& out, std::future<Token>&& cont);
-
+	Token Add(std::shared_ptr<TaskBase>&& task);
 	void Schedule(Token token);
 	
 	void Execute(std::shared_ptr<TaskBase>&& task);
@@ -61,6 +59,17 @@ private:
 	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
+
+inline void NotifyTaskFinished(std::future<Token>& token)
+{
+	assert(token.valid());
+	if (token.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+	{
+		auto t = token.get();
+		if (t.host)
+			t.host->Schedule(t);
+	}
+}
 
 template <typename Arg, typename Function>
 class Task : public TaskBase
@@ -82,22 +91,10 @@ public:
 	void Execute() override
 	{
 		Run();
-		Notify();
+		NotifyTaskFinished(m_cont);
 	}
 	
 private:
-	void Notify()
-	{
-		// notify
-		assert(m_cont.valid());
-		if (m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
-		{
-			auto t = m_cont.get();
-			if (t.host)
-				t.host->Schedule(t);
-		}
-	}
-
 	template <typename R=Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Run()
 	{
@@ -138,22 +135,10 @@ public:
 	void Execute() override
 	{
 		Run();
-		Notify();
+		NotifyTaskFinished(m_cont);
 	}
 	
 private:
-	void Notify()
-	{
-		// notify
-		assert(m_cont.valid());
-		if (m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
-		{
-			auto t = m_cont.get();
-			if (t.host)
-				t.host->Schedule(t);
-		}
-	}
-
 	template <typename R=Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Run()
 	{
@@ -173,24 +158,25 @@ private:
 	std::future<Token>      m_cont;
 };
 
+template <typename T, typename Function>
+auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Token>&& cont)
+{
+	return std::make_shared<Task<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
+}
+
 class Executor
 {
 public:
 	virtual void Execute(const std::function<void()>& func) = 0;
 };
 
-template <typename T, typename Function>
-auto TaskScheduler::Add(const std::shared_future<T>& val, Function&& func, Token& out, std::future<Token>&& cont)
+inline Token TaskScheduler::Add(std::shared_ptr<TaskBase>&& task)
 {
-	out.event = m_seq++;
-	out.host  = this;
-
-	auto task = std::make_shared<Task<T, Function>>(std::move(val), std::forward<Function>(func), std::move(cont));
-	auto result = task->Result();
+	auto event = m_seq++;
 
 	std::unique_lock<std::mutex> lock{m_task_mutex};
-	m_tasks.emplace(out.event, std::move(task));
-	return result;
+	m_tasks.emplace(event, std::move(task));
+	return {this, event};
 }
 
 inline void TaskScheduler::Schedule(Token token)
@@ -259,9 +245,10 @@ public:
 	{
 		std::promise<Token> cont_token;
 
-		Token token{};
 		auto result = m_shared_state.share();
-		auto cont   = host->Add(result, std::forward<Func>(continuation), token, cont_token.get_future());
+		auto task   = MakeTask(result, std::forward<Func>(continuation), cont_token.get_future());
+		auto cont   = task->Result();
+		auto token  = host->Add(std::move(task));
 		
 		assert(token.host);
 		assert(token.host == host);
