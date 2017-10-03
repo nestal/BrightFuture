@@ -73,10 +73,14 @@ public:
 	{
 		Continue(m_val.get());
 
+		std::cout << "pre m_cont.wait_for() " << m_cont.valid() << std::endl;
 		// notify
-		if (m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		if (m_cont.valid() && m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
 		{
+			std::cout << "post m_cont.wait_for() " << std::endl;
 			auto t = m_cont.get();
+			std::cout << "post m_cont.get() " << std::endl;
+			
 			if (t.host)
 			{
 				std::cout << "schedule cont" << std::endl;
@@ -157,11 +161,22 @@ class Future
 {
 public:
 	Future() = default;
+	
+	// move only type
 	Future(Future&&) noexcept = default;
+	Future(const Future&) = delete;
+	Future& operator=(Future&&) = default;
+	Future& operator=(const Future&) = delete;
+	
 	explicit Future(std::future<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
 		m_shared_state{std::move(shared_state)},
 		m_token{std::move(token)}
 	{
+	}
+	~Future()
+	{
+		if (m_shared_state.valid())
+			m_token.set_value({});
 	}
 
 	std::future<Token> GetToken()
@@ -224,7 +239,7 @@ auto Async(Func&& func, Executor *exe)
 		result.set_value(func());
 		
 		// notify
-		if (token.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		if (token.valid() && token.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
 		{
 			auto t = token.get();
 			if (t.host)
