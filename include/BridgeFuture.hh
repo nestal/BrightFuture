@@ -109,13 +109,13 @@ inline void NotifyTaskFinished(std::future<Token>& token)
 }
 
 template <typename Arg, typename Function>
-class Task : public TaskBase
+class ConcreteTask : public TaskBase
 {
 public:
 	// Return value of "Function". It may be void.
 	using Ret = decltype(std::declval<Function>()(std::declval<Arg>()));
 
-	Task(const std::shared_future<Arg>& arg, Function&& func, std::future<Token>&& cont) :
+	ConcreteTask(const std::shared_future<Arg>& arg, Function&& func, std::future<Token>&& cont) :
 		m_arg{arg}, m_function{std::move(func)}, m_cont{std::move(cont)}
 	{
 	}
@@ -146,20 +146,21 @@ private:
 	}
 
 private:
-	std::shared_future<Arg> m_arg;
-	std::promise<Ret>       m_return;
-	Function                m_function;
-	std::future<Token>      m_cont;
+	std::shared_future<Arg> m_arg;      //!< Argument to the function to be called in Execute().
+	std::promise<Ret>       m_return;   //!< Promise to the return value of the function to be called.
+	Function                m_function; //!< Function to be called in Execute().
+	std::future<Token>      m_cont;     //!< Token of the continuation routine that consumes the
+										//!< return value, after it is ready.
 };
 
 template <typename Function>
-class Task<void, Function> : public TaskBase
+class ConcreteTask<void, Function> : public TaskBase
 {
 public:
 	// Return value of "Function". It may be void.
 	using Ret = decltype(std::declval<Function>()());
 
-	Task(Function&& func, std::future<Token>&& cont) :
+	ConcreteTask(Function&& func, std::future<Token>&& cont) :
 		m_function{std::move(func)}, m_cont{std::move(cont)}
 	{
 	}
@@ -198,7 +199,7 @@ private:
 template <typename T, typename Function>
 auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Token>&& cont)
 {
-	return std::make_shared<Task<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
+	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
 class ThreadExecutor : public Executor
@@ -292,12 +293,12 @@ auto Async(Func&& func, TaskScheduler *exe)
 	
 	std::promise<Token> cont;
 	
-	auto task   = std::make_shared<Task<void, Func>>(std::forward<Func>(func), cont.get_future());
-	auto future = task->Result();
+	auto task   = std::make_shared<ConcreteTask<void, Func>>(std::forward<Func>(func), cont.get_future());
+	auto result = task->Result();
 	
 	exe->Execute(std::move(task));
 	
-	return Future<T>::MakeFuture(std::move(future), std::move(cont));
+	return Future<T>::MakeFuture(std::move(result), std::move(cont));
 }
 
 } // end of namespace
