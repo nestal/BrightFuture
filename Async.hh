@@ -15,6 +15,7 @@
 #include <utility>
 #include <type_traits>
 #include <unordered_map>
+#include <cassert>
 
 namespace exe {
 
@@ -53,65 +54,114 @@ private:
 	std::intptr_t m_seq{0};
 };
 
-template <typename T, typename Function>
+template <typename Arg, typename Function>
 class Task : public TaskBase
 {
 public:
-	using R = decltype(std::declval<Function>()(std::declval<T>()));
+	// Return value of "Function". It may be void.
+	using Ret = decltype(std::declval<Function>()(std::declval<Arg>()));
 
-	Task(const std::shared_future<T>& val, Function&& func, std::future<Token>&& cont) :
-		m_val{val}, m_callback{std::move(func)}, m_cont{std::move(cont)}
+	Task(const std::shared_future<Arg>& arg, Function&& func, std::future<Token>&& cont) :
+		m_arg{arg}, m_function{std::move(func)}, m_cont{std::move(cont)}
 	{
 	}
 
-	std::future<R> Result()
+	std::future<Ret> Result()
 	{
-		return m_result.get_future();
+		return m_return.get_future();
 	}
 
 	void Execute(Executor *executor) override
 	{
-		Continue(m_val.get());
-
-		std::cout << "pre m_cont.wait_for() " << m_cont.valid() << std::endl;
+		Run();
+		Notify(executor);
+	}
+	
+private:
+	void Notify(Executor *executor)
+	{
 		// notify
-		if (m_cont.valid() && m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		assert(m_cont.valid());
+		if (m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
 		{
-			std::cout << "post m_cont.wait_for() " << std::endl;
 			auto t = m_cont.get();
-			std::cout << "post m_cont.get() " << std::endl;
-			
 			if (t.host)
-			{
-				std::cout << "schedule cont" << std::endl;
 				t.host->Schedule(t, executor);
-			}
 		}
-		else
-			std::cout << "not one called then() yet" << std::endl;
+	}
+
+	template <typename R=Ret>
+	typename std::enable_if<!std::is_void<R>::value>::type Run()
+	{
+		m_return.set_value(m_function(m_arg.get()));
+	}
+
+	template <typename R=Ret>
+	typename std::enable_if<std::is_void<R>::value>::type Run()
+	{
+		m_function(m_arg.get());
+		m_return.set_value();
 	}
 
 private:
-	template <typename Arg, typename Q=R>
-	typename std::enable_if<!std::is_void<Q>::value>::type Continue(Arg&& val)
+	std::shared_future<Arg> m_arg;
+	std::promise<Ret>       m_return;
+	Function                m_function;
+	std::future<Token>      m_cont;
+};
+
+template <typename Function>
+class Task<void, Function> : public TaskBase
+{
+public:
+	// Return value of "Function". It may be void.
+	using Ret = decltype(std::declval<Function>()());
+
+	Task(Function&& func, std::future<Token>&& cont) :
+		m_function{std::move(func)}, m_cont{std::move(cont)}
 	{
-		std::cout << "setting value " << val << std::endl;
-		m_result.set_value(m_callback(std::forward<Arg>(val)));
 	}
 
-	template <typename Arg, typename Q=R>
-	typename std::enable_if<std::is_void<Q>::value>::type Continue(Arg&& val)
+	std::future<Ret> Result()
 	{
-		std::cout << "setting value (void)" << std::endl;
+		return m_return.get_future();
+	}
 
-		m_callback(std::forward<Arg>(val));
-		m_result.set_value();
+	void Execute(Executor *executor) override
+	{
+		Run();
+		Notify(executor);
+	}
+	
+private:
+	void Notify(Executor *executor)
+	{
+		// notify
+		assert(m_cont.valid());
+		if (m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		{
+			auto t = m_cont.get();
+			if (t.host)
+				t.host->Schedule(t, executor);
+		}
+	}
+
+	template <typename R=Ret>
+	typename std::enable_if<!std::is_void<R>::value>::type Run()
+	{
+		m_return.set_value(m_function());
+	}
+
+	template <typename R=Ret>
+	typename std::enable_if<std::is_void<R>::value>::type Run()
+	{
+		m_function();
+		m_return.set_value();
 	}
 
 private:
-	std::shared_future<T>   m_val;
-	std::promise<R>         m_result;
-	Function                m_callback;
+	std::promise<Ret>       m_return;
+	Function                m_function;
 	std::future<Token>      m_cont;
 };
 
@@ -152,7 +202,7 @@ class LocalExecutor : public Executor
 public:
 	void Execute(const std::function<void()>& func) override
 	{
-		func();
+		std::thread{func}.detach();
 	}
 };
 
@@ -194,20 +244,13 @@ public:
 		auto cont   = host->Add(result, std::forward<Func>(continuation), token, cont_token.get_future());
 
 		if (result.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
-		{
-			std::cout << "result ready" << std::endl;
 			host->Schedule(token, exe);
-		}
 		else
-		{
-			std::cout << "result not ready" << std::endl;
 			m_token.set_value(token);
-		}
 		
 		return MakeFuture(std::move(cont), std::move(cont_token));
 	}
 
-private:
 	template <typename Type>
 	static auto MakeFuture(std::future<Type>&& shared_state, std::promise<Token>&& token)
 	{
@@ -224,32 +267,17 @@ auto Async(Func&& func, Executor *exe)
 {
 	using T = decltype(func());
 	
-	std::promise<T> shared_state;
-	Future<T> ret{shared_state.get_future()};
-
-	std::thread{[
-		func    = std::forward<Func>(func),
-		result  = std::move(shared_state),
-		token   = ret.GetToken(),
-		exe
-	] () mutable
-	{
-		// Run the function "func" in the spawned thread. The return value will be
-		// moved to the lambda closure to be used later.
-		result.set_value(func());
-		
-		// notify
-		if (token.valid() && token.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
-		{
-			auto t = token.get();
-			if (t.host)
-				t.host->Schedule(t, exe);
-		}
-
-		std::cout << "detach" << std::endl;
-	}}.detach();
+	std::promise<Token> cont;
 	
-	return ret;
+	auto task   = std::make_shared<Task<void, Func>>(std::forward<Func>(func), cont.get_future());
+	auto future = task->Result();
+	
+	exe->Execute([task=std::move(task), exe]
+	{
+		task->Execute(exe);
+	});
+	
+	return Future<T>::MakeFuture(std::move(future), std::move(cont));
 }
 
 } // end of namespace
