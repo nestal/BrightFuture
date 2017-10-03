@@ -9,7 +9,7 @@
 // Created by nestal on 10/2/17.
 //
 
-#include "BridgeFuture.hh"
+#include "BrightFuture.hh"
 
 #include "catch.hpp"
 #include <iostream>
