@@ -31,18 +31,22 @@ struct Token
 class TaskBase
 {
 public:
-	virtual void Execute(Executor *executor) = 0;
+	virtual void Execute() = 0;
 };
 
 class TaskScheduler
 {
 public:
-	TaskScheduler() = default;
+	TaskScheduler(std::unique_ptr<Executor>&& exe) : m_executor{std::move(exe)}
+	{
+	}
 
 	template <typename T, typename Function>
 	auto Add(const std::shared_future<T>& val, Function&& func, Token& out, std::future<Token>&& cont);
 
-	void Schedule(Token token, Executor *executor);
+	void Schedule(Token token);
+	
+	void Execute(std::shared_ptr<TaskBase>&& task);
 
 	std::size_t Count() const
 	{
@@ -50,6 +54,10 @@ public:
 	}
 
 private:
+	std::mutex m_task_mutex;
+	
+	std::unique_ptr<Executor> m_executor;
+	
 	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
@@ -71,14 +79,14 @@ public:
 		return m_return.get_future();
 	}
 
-	void Execute(Executor *executor) override
+	void Execute() override
 	{
 		Run();
-		Notify(executor);
+		Notify();
 	}
 	
 private:
-	void Notify(Executor *executor)
+	void Notify()
 	{
 		// notify
 		assert(m_cont.valid());
@@ -86,7 +94,7 @@ private:
 		{
 			auto t = m_cont.get();
 			if (t.host)
-				t.host->Schedule(t, executor);
+				t.host->Schedule(t);
 		}
 	}
 
@@ -127,14 +135,14 @@ public:
 		return m_return.get_future();
 	}
 
-	void Execute(Executor *executor) override
+	void Execute() override
 	{
 		Run();
-		Notify(executor);
+		Notify();
 	}
 	
 private:
-	void Notify(Executor *executor)
+	void Notify()
 	{
 		// notify
 		assert(m_cont.valid());
@@ -142,7 +150,7 @@ private:
 		{
 			auto t = m_cont.get();
 			if (t.host)
-				t.host->Schedule(t, executor);
+				t.host->Schedule(t);
 		}
 	}
 
@@ -180,24 +188,36 @@ auto TaskScheduler::Add(const std::shared_future<T>& val, Function&& func, Token
 	auto task = std::make_shared<Task<T, Function>>(std::move(val), std::forward<Function>(func), std::move(cont));
 	auto result = task->Result();
 
+	std::unique_lock<std::mutex> lock{m_task_mutex};
 	m_tasks.emplace(out.event, std::move(task));
 	return result;
 }
 
-inline void TaskScheduler::Schedule(Token token, Executor *executor)
+inline void TaskScheduler::Schedule(Token token)
 {
-	auto it = m_tasks.find(token.event);
-	if (it != m_tasks.end())
+	std::shared_ptr<TaskBase> task;
 	{
-		executor->Execute([task=std::move(it->second), executor]
+		std::unique_lock<std::mutex> lock{m_task_mutex};
+		auto it = m_tasks.find(token.event);
+		if (it != m_tasks.end())
 		{
-			task->Execute(executor);
-		});
-		it = m_tasks.erase(it);
+			task = std::move(it->second);
+			it = m_tasks.erase(it);
+		}
 	}
+	if (task)
+		Execute(std::move(task));
 }
 
-class LocalExecutor : public Executor
+void TaskScheduler::Execute(std::shared_ptr<TaskBase>&& task)
+{
+	m_executor->Execute([task=std::move(task)]
+	{
+		task->Execute();
+	});
+}
+
+class ThreadExecutor : public Executor
 {
 public:
 	void Execute(const std::function<void()>& func) override
@@ -235,16 +255,19 @@ public:
 	}
 
 	template <typename Func>
-	auto Then(Func&& continuation, TaskScheduler *host, Executor *exe)
+	auto Then(Func&& continuation, TaskScheduler *host)
 	{
 		std::promise<Token> cont_token;
 
 		Token token{};
 		auto result = m_shared_state.share();
 		auto cont   = host->Add(result, std::forward<Func>(continuation), token, cont_token.get_future());
+		
+		assert(token.host);
+		assert(token.host == host);
 
 		if (result.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
-			host->Schedule(token, exe);
+			host->Schedule(token);
 		else
 			m_token.set_value(token);
 		
@@ -263,7 +286,7 @@ private:
 };
 
 template <typename Func>
-auto Async(Func&& func, Executor *exe)
+auto Async(Func&& func, TaskScheduler *exe)
 {
 	using T = decltype(func());
 	
@@ -272,10 +295,7 @@ auto Async(Func&& func, Executor *exe)
 	auto task   = std::make_shared<Task<void, Func>>(std::forward<Func>(func), cont.get_future());
 	auto future = task->Result();
 	
-	exe->Execute([task=std::move(task), exe]
-	{
-		task->Execute(exe);
-	});
+	exe->Execute(std::move(task));
 	
 	return Future<T>::MakeFuture(std::move(future), std::move(cont));
 }

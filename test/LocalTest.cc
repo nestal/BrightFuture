@@ -9,35 +9,34 @@
 // Created by nestal on 10/2/17.
 //
 
-#include <iostream>
-#include "Async.hh"
+#include "BridgeFuture.hh"
 
 #include "catch.hpp"
+#include <iostream>
 
 using namespace exe;
 using namespace std::chrono_literals;
 
 TEST_CASE( "Async simple", "[normal]" )
 {
-	TaskScheduler sch;
-	LocalExecutor exec;
+	TaskScheduler sch{std::make_unique<ThreadExecutor>()};
 	
 	auto future = Async([]
 	{
 		std::this_thread::sleep_for(2s);
 		return 100;
-	}, &exec);
+	}, &sch);
 	
 	future.Then([](int val)
 	{
 		REQUIRE(val == 100);
 		return std::string{"abc"};
-	}, &sch, &exec).Then([](const std::string& s)
+	}, &sch).Then([](const std::string& s)
 	{
 		std::cout << "then2 " << s << std::endl;
 		REQUIRE(s == "abc");
 		std::this_thread::sleep_for(1s);
-	}, &sch, &exec);
+	}, &sch);
 	
 	using namespace std::chrono_literals;
 	while (sch.Count() > 0)
