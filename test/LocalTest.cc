@@ -14,7 +14,7 @@
 #include "catch.hpp"
 #include <iostream>
 
-using namespace exe;
+using namespace BrightFuture;
 using namespace std::chrono_literals;
 
 TEST_CASE( "Async simple", "[normal]" )

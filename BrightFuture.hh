@@ -17,14 +17,20 @@
 #include <unordered_map>
 #include <cassert>
 
-namespace exe {
+namespace BrightFuture {
 
 class Executor;
 class TaskScheduler;
 
+/**
+ * \brief A token to represent a task to be called.
+ *
+ * It is returned by TaskScheduler::Add() to represent the task being added. Pass the token
+ * to TaskScheduler::Schedule() to run that task.
+ */
 struct Token
 {
-	TaskScheduler   *host;
+	TaskScheduler   *host;  //!<
 	std::intptr_t   event;
 };
 
