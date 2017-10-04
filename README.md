@@ -1,4 +1,4 @@
-# BrightFuture: A Simple Implementation of a Then()-able Future
+# BrightFuture: A Simple Implementation of a Then()-able future
 
 In the C++11 specification, a new concurrency library was added to the
 standard library. It provides some convenient APIs like `std::async()`,
@@ -26,11 +26,11 @@ using namespace BrightFuture;
 int main()
 {
 	// Creates an executor to run the callbacks
-	ExecutorBase<QueueExecutor> exe;
+	QueueExecutor exe;
 	
-	// Use another thread to run the executor. Run() will block the
-	// worker thread until we call Quit().
-	std::thread worker{[&exe]{while(exe.Run()>0);}};
+	// Use another thread to run the executor. These worker thread will
+	// block until we call Quit() on the QueueExecutor.
+	std::thread worker = exe.Spawn();
 	
 	// Run a task asynchronously. Returns a future to the result.
 	auto future = Async([]

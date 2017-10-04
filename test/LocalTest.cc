@@ -25,17 +25,17 @@ TEST_CASE( "Async simple", "[normal]" )
 	worker.push_back(exe.Spawn());
 	worker.push_back(exe.Spawn());
 	
-	auto future = Async([]
+	auto future = async([]
 	{
 		std::this_thread::sleep_for(2s);
 		return 100;
 	}, &exe);
 	
-	future.Then([](int val)
+	future.then([](int val)
 	{
 		REQUIRE(val == 100);
 		return std::string{"abc"};
-	}, &exe).Then([](const std::string& s)
+	}, &exe).then([](const std::string& s)
 	{
 		REQUIRE(s == "abc");
 		std::this_thread::sleep_for(1s);

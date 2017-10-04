@@ -234,6 +234,8 @@ public:
 	{
 		// Grab the whole queue while holding the lock, and then iterate
 		// each function in the queue after releasing the lock.
+		// This design optimizes throughput and minimize contention, but scarifies latency
+		// and concurrency.
 		std::deque<std::function<void()>> queue;
 		{
 			std::unique_lock<std::mutex> lock{m_mux};
@@ -241,7 +243,7 @@ public:
 			queue.swap(m_queue);
 		}
 		
-		// Only execute the function after releasing the lock
+		// Execute the function after releasing the lock to reduce contention
 		for (auto&& func : queue)
 			func();
 		
@@ -251,7 +253,6 @@ public:
 	
 	void Quit()
 	{
-		std::unique_lock<std::mutex> lock{m_mux};
 		m_quit = true;
 	}
 
@@ -278,28 +279,29 @@ private:
 	std::mutex                          m_mux;
 	std::condition_variable             m_cond;
 	std::deque<std::function<void()>>   m_queue;
-	bool m_quit{false};
+	std::atomic<bool> m_quit{false};
 	std::atomic<decltype(m_queue.size())> m_count{0};
 };
 
 template <typename T>
-class Future
+class future
 {
 public:
-	Future() = default;
+	future() = default;
 	
 	// move only type
-	Future(Future&&) noexcept = default;
-	Future(const Future&) = delete;
-	Future& operator=(Future&&) noexcept= default;
-	Future& operator=(const Future&) = delete;
+	future(future&&) noexcept = default;
+	future(const future&) = delete;
+	future& operator=(future&&) noexcept= default;
+	future& operator=(const future&) = delete;
 	
-	explicit Future(std::future<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
+	explicit future(std::future<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
 		m_shared_state{std::move(shared_state)},
 		m_token{std::move(token)}
 	{
 	}
-	~Future()
+	
+	~future()
 	{
 		// This is a bit tricky. If the future is destroyed without called Then(), then
 		// no one will set the m_token promise. When the executor finishes running the
@@ -314,14 +316,14 @@ public:
 	}
 
 	template <typename Func>
-	auto Then(Func&& continuation, Executor *host)
+	auto then(Func&& continuation, Executor *host)
 	{
 		// The promise of the next continuation routine's token. It is not _THIS_ continuation
 		// routine's token. We are adding the _THIS_ continuation routine (i.e. the "continuation"
 		// argument) right here, so we knows the its token.
 		//
 		// We don't know the next continuation routine's token yet. It will be known when Then()
-		// is called with the Future returned by this function.
+		// is called with the future returned by this function.
 		std::promise<Token> next_token;
 
 		// Prepare the continuation routine as a task. The function of the task is of course
@@ -349,10 +351,44 @@ public:
 		return MakeFuture(std::move(ret), std::move(next_token));
 	}
 
+	std::shared_future<T> share()
+	{
+		return m_shared_state.share();
+	}
+	
+	template <typename R=T>
+	typename std::enable_if<std::is_void<R>::value>::type get()
+	{
+		m_shared_state.get();
+	}
+	
+	template <typename R=T>
+	typename std::enable_if<!std::is_void<R>::value, T>::type& get()
+	{
+		return m_shared_state.get();
+	}
+	
+	void wait()
+	{
+		m_shared_state.wait();
+	}
+	
+	template <typename Rep, typename Ratio>
+	std::future_status wait_for(const std::chrono::duration<Rep, Ratio>& duration)
+	{
+		return m_shared_state.wait_for(duration);
+	}
+	
+	template <typename Clock, typename Duration>
+	std::future_status wait_until(const std::chrono::time_point<Clock, Duration>& time_point)
+	{
+		return m_shared_state.wait_until(time_point);
+	}
+	
 	template <typename Type>
 	static auto MakeFuture(std::future<Type>&& shared_state, std::promise<Token>&& token)
 	{
-		return Future<Type>{std::move(shared_state), std::move(token)};
+		return future<Type>{std::move(shared_state), std::move(token)};
 	}
 
 private:
@@ -361,7 +397,7 @@ private:
 };
 
 template <typename Func>
-auto Async(Func&& func, Executor *exe)
+auto async(Func&& func, Executor *exe)
 {
 	using T = decltype(func());
 	
@@ -372,7 +408,7 @@ auto Async(Func&& func, Executor *exe)
 	
 	exe->Execute(std::move(task));
 	
-	return Future<T>::MakeFuture(std::move(result), std::move(cont));
+	return future<T>::MakeFuture(std::move(result), std::move(cont));
 }
 
 } // end of namespace
