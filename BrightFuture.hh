@@ -20,20 +20,9 @@
 
 namespace BrightFuture {
 
-class Executor;
-class TaskScheduler;
-
-/**
- * \brief A token to represent a task to be called.
- *
- * It is returned by TaskScheduler::Add() to represent the task being added. Pass the token
- * to TaskScheduler::Schedule() to run that task.
- */
-struct Token
-{
-	TaskScheduler   *host;  //!<
-	std::intptr_t   event;
-};
+struct Token;
+class TaskBase;
+class TaskSchedulerBase;
 
 class TaskBase
 {
@@ -42,21 +31,36 @@ public:
 	virtual void Execute() = 0;
 };
 
-class Executor
+class TaskSchedulerBase
 {
 public:
-	virtual ~Executor() = default;
-	virtual void Execute(const std::function<void()>& func) = 0;
+	virtual ~TaskSchedulerBase() = default;
+	virtual void Execute(std::shared_ptr<TaskBase>&& task) = 0;
+	virtual Token Add(std::shared_ptr<TaskBase>&& task) = 0;
+	virtual void Schedule(Token token) = 0;
+};
+/**
+ * \brief A token to represent a task to be called.
+ *
+ * It is returned by TaskScheduler::Add() to represent the task being added. Pass the token
+ * to TaskScheduler::Schedule() to run that task.
+ */
+struct Token
+{
+	TaskSchedulerBase   *host;  //!<
+	std::intptr_t       event;
 };
 
-class TaskScheduler
+template <typename Executor>
+class TaskScheduler : public TaskSchedulerBase
 {
 public:
-	explicit TaskScheduler(std::unique_ptr<Executor>&& exe) : m_executor{std::move(exe)}
+	template <typename... Arg>
+	explicit TaskScheduler(Arg... arg) : m_executor{std::forward<Arg>(arg)...}
 	{
 	}
 
-	Token Add(std::shared_ptr<TaskBase>&& task)
+	Token Add(std::shared_ptr<TaskBase>&& task) override
 	{
 		std::unique_lock<std::mutex> lock{m_task_mutex};
 		auto event = m_seq++;
@@ -64,7 +68,7 @@ public:
 		return {this, event};
 	}
 
-	void Schedule(Token token)
+	void Schedule(Token token) override
 	{
 		std::shared_ptr<TaskBase> task;
 		{
@@ -82,24 +86,26 @@ public:
 			Execute(std::move(task));
 	}
 
-	void Execute(std::shared_ptr<TaskBase>&& task)
+	void Execute(std::shared_ptr<TaskBase>&& task) override
 	{
-		m_executor->Execute([task=std::move(task)]
-		{
-			task->Execute();
-		});
+		m_executor([task=std::move(task)]{ task->Execute(); });
 	}
 
 	std::size_t Count() const
 	{
 		return m_tasks.size();
 	}
+	
+	Executor& GetExecutor()
+	{
+		return m_executor;
+	}
 
 private:
 	//! Executor is thread-safe. There is no need to protect it with a mutex.
-	std::unique_ptr<Executor> m_executor;
+	Executor    m_executor;
 	
-	std::mutex m_task_mutex;
+	std::mutex  m_task_mutex;
 	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
@@ -209,15 +215,16 @@ auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Tok
 	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
-class QueueExecutor : public Executor
+class QueueExecutor
 {
 public:
 	QueueExecutor() = default;
 	
-	void Execute(const std::function<void()>& func) override
+	template <typename Func>
+	void operator()(Func&& func)
 	{
 		std::unique_lock<std::mutex> lock{m_mux};
-		m_queue.push_back(func);
+		m_queue.push_back(std::forward<Func>(func));
 		m_cond.notify_one();
 	}
 	
@@ -237,6 +244,8 @@ public:
 		if (func)
 			func();
 		
+		// func() may add functions to the queue, so need to check again.
+		std::unique_lock<std::mutex> lock{m_mux};
 		return !m_queue.empty();
 	}
 	
@@ -275,7 +284,7 @@ public:
 	}
 
 	template <typename Func>
-	auto Then(Func&& continuation, TaskScheduler *host)
+	auto Then(Func&& continuation, TaskSchedulerBase *host)
 	{
 		// The promise of the next continuation routine's token. It is not _THIS_ continuation
 		// routine's token. We are adding the _THIS_ continuation routine (i.e. the "continuation"
@@ -322,7 +331,7 @@ private:
 };
 
 template <typename Func>
-auto Async(Func&& func, TaskScheduler *exe)
+auto Async(Func&& func, TaskSchedulerBase *exe)
 {
 	using T = decltype(func());
 	

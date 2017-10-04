@@ -26,7 +26,7 @@ using namespace BrightFuture;
 int main()
 {
 	// Creates an executor to run the callbacks
-	TaskScheduler sch{std::make_unique<QueueExecutor>()};
+	TaskScheduler<QueueExecutor> sch;
 	
 	// Run a task asynchronously. Returns a future to the result.
 	auto future = Async([]

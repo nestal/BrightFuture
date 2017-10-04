@@ -18,9 +18,11 @@ using namespace std::chrono_literals;
 
 TEST_CASE( "Async simple", "[normal]" )
 {
-	auto exe_up = std::make_unique<QueueExecutor>();
-	auto exe    = exe_up.get();
-	TaskScheduler sch{std::move(exe_up)};
+	TaskScheduler<QueueExecutor> sch;
+	
+	// use a new thread to run the executor
+	int count = 1;
+	std::thread worker{[&sch, &count]{ while (sch.GetExecutor().Run()) count++; }};
 	
 	auto future = Async([]
 	{
@@ -38,9 +40,8 @@ TEST_CASE( "Async simple", "[normal]" )
 		std::this_thread::sleep_for(1s);
 	}, &sch);
 
-	int count = 1;
-	while (exe->Run())
-		count++;
+	// Wait until the worker thread has nothing to do.
+	worker.join();
 	
 	// Run() called 3 times
 	REQUIRE(count == 3);
