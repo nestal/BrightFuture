@@ -6,10 +6,13 @@ standard library. It provides some convenient APIs like `std::async()`,
 attaching a continuation routine when a future is fulfilled. The aim of
 this small library is to fill that gap.
 
-# Design Goals
+# Design Rationale
+
+As this library is developed as a polyfill for [`std::experimental::future`](http://en.cppreference.com/w/cpp/experimental/future),
+it has the following goals:
 
 *   Using only existing standard C++ concurrency facilities.
-*   Easy to integrate with existing C++ projects.
+*   Easy to deploy to existing C++ projects.
 *   Small, single header only.
 *   Works with common multi-threaded frameworks like boost::asio and Qt.
 *   Extensible to any other multi-threaded frameworks.
@@ -46,8 +49,8 @@ int main()
 	// by the executor (i.e. sch).
 	future.then([](int val)
 	{
-		std::cout << "We should be 100: " << val << std::endl;
-		return std::string{"abc"};
+		assert(val == 100);
+		return "abc"s;
 	}, &exe).
 	
 	// The return value of then() is another future, which refers to
@@ -58,7 +61,7 @@ int main()
 	// of the previous continuation routine.
 	then([](const std::string& s)
 	{
-		std::cout << "The next result is a string " << s << std::endl;
+		assert(s == "abc"s);
 	}, &exe);}
 	
 	// Quit the executor and the worker thread
@@ -80,4 +83,4 @@ the code shorter and easier to read.
 
 # Download
 
-There is only one header file to download: [BrightFuture.h](BrightFuture.hh) 
+There is only one header file to download: [BrightFuture.hh](BrightFuture.hh).

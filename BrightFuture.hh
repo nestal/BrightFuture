@@ -344,6 +344,8 @@ public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
 	{
+		assert(valid());
+		
 		// The promise of the next continuation routine's token. It is not _THIS_ continuation
 		// routine's token. We are adding the _THIS_ continuation routine (i.e. the "continuation"
 		// argument) right here, so we knows the its token.
@@ -355,47 +357,55 @@ public:
 		// Prepare the continuation routine as a task. The function of the task is of course
 		// the continuation routine itself. The argument of the continuation routine is the
 		// result of the last async call, i.e. the variable referred by the m_shared_state future.
-		auto arg    = m_shared_state.share();
-		auto task   = MakeTask(arg, std::forward<Func>(continuation), next_token.get_future());
+		auto continuation_arg  = m_shared_state.share();
+		auto continuation_task = MakeTask(continuation_arg, std::forward<Func>(continuation), next_token.get_future());
 		
 		// We also need to know the promise to return value of the continuation routine as well.
 		// It will be passed to the future returned by this function.
-		auto ret    = task->Result();
-		auto token  = host->Add(std::move(task));
+		auto continuation_return_value = continuation_task->Result();
 		
-		assert(token.host);
-		assert(token.host == host);
+		// Add the continuation routine to the executor, which will run the task and set its return
+		// value to the promise above. A token to the task is returned. We use this token to schedule
+		// the continuation routine.
+		auto continuation_token = host->Add(std::move(continuation_task));
+		
+		assert(continuation_token.host);
+		assert(continuation_token.host == host);
 
 		// "arg" is the argument of the continuation function, i.e. the result of the previous async
 		// call. If it is ready, that means the previous async call is finished. We can directly
 		// invoke the continuation function here.
-		if (arg.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
-			host->Schedule(token);
+		if (continuation_arg.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
+			host->Schedule(continuation_token);
 		else
-			m_token.set_value(token);
+			m_token.set_value(continuation_token);
 		
-		return MakeFuture(std::move(ret), std::move(next_token));
+		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
 	}
 
 	std::shared_future<T> share()
 	{
+		assert(valid());
 		return m_shared_state.share();
 	}
 	
 	template <typename R=T>
 	typename std::enable_if<std::is_void<R>::value>::type get()
 	{
+		assert(valid());
 		m_shared_state.get();
 	}
 	
 	template <typename R=T>
 	typename std::enable_if<!std::is_void<R>::value, T>::type& get()
 	{
+		assert(valid());
 		return m_shared_state.get();
 	}
 	
 	void wait()
 	{
+		assert(valid());
 		m_shared_state.wait();
 	}
 	
@@ -406,18 +416,21 @@ public:
 	
 	bool is_ready() const
 	{
+		assert(valid());
 		return m_shared_state.wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
 	}
 	
 	template <typename Rep, typename Ratio>
 	std::future_status wait_for(const std::chrono::duration<Rep, Ratio>& duration)
 	{
+		assert(valid());
 		return m_shared_state.wait_for(duration);
 	}
 	
 	template <typename Clock, typename Duration>
 	std::future_status wait_until(const std::chrono::time_point<Clock, Duration>& time_point)
 	{
+		assert(valid());
 		return m_shared_state.wait_until(time_point);
 	}
 	
