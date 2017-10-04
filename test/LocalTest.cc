@@ -18,14 +18,14 @@ using namespace std::chrono_literals;
 
 TEST_CASE( "Async simple", "[normal]" )
 {
-	TaskScheduler<QueueExecutor> sch;
+	QueueExecutor exe;
 	
 	// use a new thread to run the executor
 	int count = 0;
-	std::thread worker{[&sch, &count]
+	std::thread worker{[&exe, &count]
 	{
 		std::size_t c;
-		while ((c = sch.Run()) > 0)
+		while ((c = exe.Run()) > 0)
 			count += c;
 	}};
 	
@@ -33,20 +33,20 @@ TEST_CASE( "Async simple", "[normal]" )
 	{
 		std::this_thread::sleep_for(2s);
 		return 100;
-	}, &sch);
+	}, &exe);
 	
 	future.Then([](int val)
 	{
 		REQUIRE(val == 100);
 		return std::string{"abc"};
-	}, &sch).Then([](const std::string& s)
+	}, &exe).Then([](const std::string& s)
 	{
 		REQUIRE(s == "abc");
 		std::this_thread::sleep_for(1s);
-	}, &sch);
+	}, &exe);
 
 	// Quit the worker thread
-	sch.Quit();
+	exe.Quit();
 	worker.join();
 	
 	// Run() called 3 times

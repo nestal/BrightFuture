@@ -26,7 +26,7 @@ using namespace BrightFuture;
 int main()
 {
 	// Creates an executor to run the callbacks
-	TaskScheduler<QueueExecutor> exe;
+	ExecutorBase<QueueExecutor> exe;
 	
 	// Use another thread to run the executor. Run() will block the
 	// worker thread until we call Quit().

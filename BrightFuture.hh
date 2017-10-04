@@ -22,7 +22,7 @@ namespace BrightFuture {
 
 struct Token;
 class TaskBase;
-class TaskSchedulerBase;
+class Executor;
 
 class TaskBase
 {
@@ -31,10 +31,10 @@ public:
 	virtual void Execute() = 0;
 };
 
-class TaskSchedulerBase
+class Executor
 {
 public:
-	virtual ~TaskSchedulerBase() = default;
+	virtual ~Executor() = default;
 	virtual void Execute(std::shared_ptr<TaskBase>&& task) = 0;
 	virtual Token Add(std::shared_ptr<TaskBase>&& task) = 0;
 	virtual void Schedule(Token token) = 0;
@@ -47,18 +47,15 @@ public:
  */
 struct Token
 {
-	TaskSchedulerBase   *host;  //!<
+	Executor   *host;
 	std::intptr_t       event;
 };
 
-template <typename Executor>
-class TaskScheduler : public TaskSchedulerBase, public Executor
+template <typename ConcreteExecutor>
+class ExecutorBase : public Executor
 {
 public:
-	template <typename... Arg>
-	explicit TaskScheduler(Arg... arg) : Executor{std::forward<Arg>(arg)...}
-	{
-	}
+	ExecutorBase() = default;
 
 	Token Add(std::shared_ptr<TaskBase>&& task) override
 	{
@@ -88,7 +85,8 @@ public:
 
 	void Execute(std::shared_ptr<TaskBase>&& task) override
 	{
-		Executor::Execute([task=std::move(task)]{ task->Execute(); });
+		// CRTP
+		static_cast<ConcreteExecutor*>(this)->Execute([task=std::move(task)]{ task->Execute(); });
 	}
 
 private:
@@ -227,7 +225,7 @@ auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Tok
 	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
-class QueueExecutor
+class QueueExecutor : public ExecutorBase<QueueExecutor>
 {
 public:
 	QueueExecutor() = default;
@@ -255,8 +253,7 @@ public:
 		std::unique_lock<std::mutex> lock{m_mux};
 		m_quit = true;
 	}
-	
-protected:
+
 	template <typename Func>
 	void Execute(Func&& func)
 	{
@@ -304,7 +301,7 @@ public:
 	}
 
 	template <typename Func>
-	auto Then(Func&& continuation, TaskSchedulerBase *host)
+	auto Then(Func&& continuation, Executor *host)
 	{
 		// The promise of the next continuation routine's token. It is not _THIS_ continuation
 		// routine's token. We are adding the _THIS_ continuation routine (i.e. the "continuation"
@@ -351,7 +348,7 @@ private:
 };
 
 template <typename Func>
-auto Async(Func&& func, TaskSchedulerBase *exe)
+auto Async(Func&& func, Executor *exe)
 {
 	using T = decltype(func());
 	
