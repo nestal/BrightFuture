@@ -1,10 +1,12 @@
-# BrightFuture: A Simple Implementation of a Then()-able future
+# BrightFuture: A Simple Implementation of a then()-able future
 
 In the C++11 specification, a new concurrency library was added to the
 standard library. It provides some convenient APIs like `std::async()`,
 `std::future` and `std::promise`. However, an important feature was missing:
 attaching a continuation routine when a future is fulfilled. The aim of
 this small library is to fill that gap.
+
+There is only one header file to download: [BrightFuture.hh](BrightFuture.hh).
 
 # Design Rationale
 
@@ -82,10 +84,6 @@ C++14 is used in this project for:
 Both features are not mandatory for implementating futures. It just make
 the code shorter and easier to read.
 
-# Download
-
-There is only one header file to download: [BrightFuture.hh](BrightFuture.hh).
-
 # Design
 
 There are 3 major components in this library: future, Executor and Tasks.
@@ -140,3 +138,17 @@ owns a queue of tasks waiting for to be run by some threads. BrightFuture
 provides a `QueueExecutor` that implements a thread pool using
 `std::thread`s. It is easy to implement another executor for boost::asio
 or Qt.
+
+## Futures
+
+Unlike executors, tasks and tokens, futures are user-visible. The API of
+Future is directly used by the developers. It is the most important, but
+also very simple.
+
+The futures in BrightFuture is just a simple wrapper around `std::future`.
+The implementation of most member functions of BrightFutures just forwards
+to `std::future`, except `then()`.
+
+In order to allow developers to attach continuation routines, BrightFutures
+also have a token to the continuation routine. By default, this token is
+null, indicating no continuation routine to be run. It is set by `then()`.
