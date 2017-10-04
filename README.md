@@ -26,14 +26,18 @@ using namespace BrightFuture;
 int main()
 {
 	// Creates an executor to run the callbacks
-	TaskScheduler<QueueExecutor> sch;
+	TaskScheduler<QueueExecutor> exe;
+	
+	// Use another thread to run the executor. Run() will block the
+	// worker thread until we call Quit().
+	std::thread worker{[&exe]{while(exe.Run()>0);}};
 	
 	// Run a task asynchronously. Returns a future to the result.
 	auto future = Async([]
 	{
 		std::this_thread::sleep_for(2s);
 		return 100;
-	}, &sch);
+	}, &exe);
 	
 	// Attach a continuation routine, which will be run when the
 	// async task is finished. The argument of the continuation
@@ -44,7 +48,7 @@ int main()
 	{
 		std::cout << "We should be 100: " << val << std::endl;
 		return std::string{"abc"};
-	}, &sch).
+	}, &exe).
 	
 	// The return value of Then() is another future, which refers to
 	// the return value of the previous continuation routine. We can
@@ -55,7 +59,11 @@ int main()
 	Then([](const std::string& s)
 	{
 		std::cout << "The next result is a string " << s << std::endl;
-	}, &sch);}
+	}, &exe);}
+	
+	// Quit the executor and the worker thread
+	exe.Quit();
+	worker.join();
 }
 ```
 

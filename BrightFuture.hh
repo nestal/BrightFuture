@@ -287,11 +287,6 @@ public:
 			m_token.set_value({});
 	}
 
-	std::future<Token> GetToken()
-	{
-		return m_token.get_future();
-	}
-
 	template <typename Func>
 	auto Then(Func&& continuation, TaskSchedulerBase *host)
 	{
