@@ -95,8 +95,8 @@ There are a few features missing in BrightFuture that are supported by
 *   Unwrapping constructor: i.e. `future<T>::future( future<future<T>&& t)`
 
 While it is not impossible to implement these features, doing so will
-compromise simple design. The library will become much bigger and harder
-to maintain.
+compromise the simple design. The library will become much bigger and
+harder to maintain.
 
 # Design
 

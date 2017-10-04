@@ -14,28 +14,34 @@
 #include "catch.hpp"
 
 using namespace BrightFuture;
-using namespace std::chrono_literals;
+using namespace Catch::Matchers;
 
 TEST_CASE( "Simple async multithread case", "[normal]" )
 {
+	using namespace std::chrono_literals;
 	QueueExecutor exe;
 	
 	// use two new threads to run the executor
 	auto worker = exe.Spawn(2);
-
-	auto future = async([]
+	REQUIRE(worker.size() == 2);
+	std::vector<std::thread::id> tids = {worker.front().get_id(), worker.back().get_id()};
+	
+	auto future = async([tids]
 	{
+		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		std::this_thread::sleep_for(100ms);
 		return 100;
 	}, &exe);
 	
-	future.then([](int val)
+	future.then([tids](int val)
 	{
 		REQUIRE(val == 100);
+		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		return std::string{"abc"};
-	}, &exe).then([](const std::string& s)
+	}, &exe).then([tids](const std::string& s)
 	{
 		REQUIRE(s == "abc");
+		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		std::this_thread::sleep_for(200ms);
 	}, &exe);
 
@@ -50,11 +56,15 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 
 TEST_CASE( "Simple async single thread case", "[normal]" )
 {
+	using namespace std::chrono_literals;
+
 	QueueExecutor exe;
+	auto tid = std::this_thread::get_id();
 	
 	bool executed{false};
-	auto future = async([&executed]
+	auto future = async([&executed, tid]
 	{
+		REQUIRE(tid == std::this_thread::get_id());
 		std::this_thread::sleep_for(200ms);
 		executed = true;
 		return 0.5;
@@ -66,8 +76,9 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	REQUIRE(exe.Count() == 1);
 	
 	executed = false;
-	future.then([&executed](double val)
+	future.then([&executed, tid](double val)
 	{
+		REQUIRE(tid == std::this_thread::get_id());
 		REQUIRE(val == 0.5);
 		executed = true;
 	}, &exe);
@@ -76,4 +87,33 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	REQUIRE(exe.Run() == 1);
 	REQUIRE(executed);
 	REQUIRE(exe.Count() == 2);
+}
+
+TEST_CASE( "Two executors", "[normal]" )
+{
+	using namespace std::string_literals;
+
+	QueueExecutor exe1, exe2;
+	auto thread1 = exe1.Spawn();
+	auto thread2 = exe2.Spawn();
+	
+	// Call async() to run something on exe1. Since exe1 has only one thread,
+	// the ID of the thread running the task must be thread1.
+	auto future = async([tid=thread1.get_id()]
+	{
+		REQUIRE(std::this_thread::get_id() == tid);
+		return "string"s;
+	}, &exe1);
+	
+	// Similarly, run the continuation routine on exe2 and verify the thread ID.
+	future.then([tid=thread2.get_id()](const std::string& s)
+	{
+		REQUIRE(s == "string"s);
+		REQUIRE(std::this_thread::get_id() == tid);
+	}, &exe2);
+	
+	exe1.Quit();
+	exe2.Quit();
+	thread1.join();
+	thread2.join();
 }
