@@ -97,35 +97,48 @@ private:
 	std::intptr_t m_seq{0};
 };
 
-/**
- * \brief Call the continuation routine specified by \a token
- * \param token The future to token to the continuation routine
- *
- * Token represent a continuation routine in an executor. This function tries to call the continuation
- * routine specified by a Token. If the token is not ready yet, that means the continuation routine
- * is not specified yet, i.e. Future::Then() is not yet called. In this case we do nothing here, the
- * continuation routine will be scheduled later when Future::Then() is called.
- */
-inline void TryContinue(std::future<Token>& token)
+template <typename Function>
+class Continuation : public TaskBase
 {
-	assert(token.valid());
-	if (token.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+protected:
+	Continuation(Function&& func, std::future<Token>&& cont) :
+		m_function{std::move(func)}, m_cont{std::move(cont)}
 	{
-		auto t = token.get();
-		if (t.host)
-			t.host->Schedule(t);
 	}
-}
+	
+	/**
+	 * \brief Call the continuation routine specified by \a token
+	 *
+	 * Token represent a continuation routine in an executor. This function tries to call the continuation
+	 * routine specified by a Token. If the token is not ready yet, that means the continuation routine
+	 * is not specified yet, i.e. Future::Then() is not yet called. In this case we do nothing here, the
+	 * continuation routine will be scheduled later when Future::Then() is called.
+	 */
+	void TryContinue()
+	{
+		assert(m_cont.valid());
+		if (m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		{
+			auto t = m_cont.get();
+			if (t.host)
+				t.host->Schedule(t);
+		}
+	}
+
+	Function                m_function; //!< Function to be called in Execute().
+	std::future<Token>      m_cont;     //!< Token of the continuation routine that consumes the
+										//!< return value, after it is ready.
+};
 
 template <typename Arg, typename Function>
-class ConcreteTask : public TaskBase
+class ConcreteTask : public Continuation<Function>
 {
 public:
 	// Return value of "Function". It may be void.
 	using Ret = decltype(std::declval<Function>()(std::declval<Arg>()));
 
 	ConcreteTask(const std::shared_future<Arg>& arg, Function&& func, std::future<Token>&& cont) :
-		m_arg{arg}, m_function{std::move(func)}, m_cont{std::move(cont)}
+		m_arg{arg}, Continuation<Function>{std::move(func), std::move(cont)}
 	{
 	}
 
@@ -137,40 +150,37 @@ public:
 	void Execute() override
 	{
 		Run();
-		TryContinue(m_cont);
+		Continuation<Function>::TryContinue();
 	}
 	
 private:
 	template <typename R=Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Run()
 	{
-		m_return.set_value(m_function(m_arg.get()));
+		m_return.set_value(Continuation<Function>::m_function(m_arg.get()));
 	}
 
 	template <typename R=Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Run()
 	{
-		m_function(m_arg.get());
+		Continuation<Function>::m_function(m_arg.get());
 		m_return.set_value();
 	}
 
 private:
 	std::shared_future<Arg> m_arg;      //!< Argument to the function to be called in Execute().
 	std::promise<Ret>       m_return;   //!< Promise to the return value of the function to be called.
-	Function                m_function; //!< Function to be called in Execute().
-	std::future<Token>      m_cont;     //!< Token of the continuation routine that consumes the
-										//!< return value, after it is ready.
 };
 
 template <typename Function>
-class ConcreteTask<void, Function> : public TaskBase
+class ConcreteTask<void, Function> : public Continuation<Function>
 {
 public:
 	// Return value of "Function". It may be void.
 	using Ret = decltype(std::declval<Function>()());
 
 	ConcreteTask(Function&& func, std::future<Token>&& cont) :
-		m_function{std::move(func)}, m_cont{std::move(cont)}
+		Continuation<Function>{std::move(func), std::move(cont)}
 	{
 	}
 
@@ -182,27 +192,25 @@ public:
 	void Execute() override
 	{
 		Run();
-		TryContinue(m_cont);
+		Continuation<Function>::TryContinue();
 	}
 	
 private:
 	template <typename R=Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Run()
 	{
-		m_return.set_value(m_function());
+		m_return.set_value(Continuation<Function>::m_function());
 	}
 
 	template <typename R=Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Run()
 	{
-		m_function();
+		Continuation<Function>::m_function();
 		m_return.set_value();
 	}
 
 private:
 	std::promise<Ret>       m_return;
-	Function                m_function;
-	std::future<Token>      m_cont;
 };
 
 template <typename T, typename Function>
