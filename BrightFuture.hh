@@ -47,8 +47,8 @@ public:
  */
 struct Token
 {
-	Executor   *host;
-	std::intptr_t       event;
+	Executor        *host;
+	std::intptr_t   event;
 };
 
 template <typename ConcreteExecutor>
@@ -95,32 +95,32 @@ private:
 	std::intptr_t m_seq{0};
 };
 
-template <typename Arg, typename Function>
+template <typename Arg, typename Callable>
 struct ReturnType
 {
-	using Type = decltype(std::declval<Function>()(std::declval<Arg>()));
+	using Type = decltype(std::declval<Callable>()(std::declval<Arg>()));
 };
 
-template <typename Function>
-struct ReturnType<void, Function>
+template <typename Callable>
+struct ReturnType<void, Callable>
 {
-	using Type = decltype(std::declval<Function>()());
+	using Type = decltype(std::declval<Callable>()());
 };
 
-template <typename Arg, typename Function>
+template <typename Arg, typename Callable>
 class Continuation : public TaskBase
 {
 public:
 	// Return value of "Function". It may be void.
-	using Ret = typename ReturnType<Arg, Function>::Type;
+	using Ret = typename ReturnType<Arg, Callable>::Type;
 	
-	std::future<Ret> Result()
+	auto Result()
 	{
 		return m_return.get_future();
 	}
 
 protected:
-	Continuation(Function&& func, std::future<Token>&& cont) :
+	Continuation(Callable&& func, std::future<Token>&& cont) :
 		m_function{std::move(func)}, m_cont{std::move(cont)}
 	{
 	}
@@ -145,7 +145,7 @@ protected:
 	}
 
 	std::promise<Ret>       m_return;   //!< Promise to the return value of the function to be called.
-	Function                m_function; //!< Function to be called in Execute().
+	Callable                m_function; //!< Function to be called in Execute().
 	std::future<Token>      m_cont;     //!< Token of the continuation routine that consumes the
 										//!< return value, after it is ready.
 };
@@ -230,7 +230,7 @@ class QueueExecutor : public ExecutorBase<QueueExecutor> // CRTP
 public:
 	QueueExecutor() = default;
 	
-	std::size_t Run()
+	auto Run()
 	{
 		// Grab the whole queue while holding the lock, and then iterate
 		// each function in the queue after releasing the lock.
@@ -243,11 +243,9 @@ public:
 		
 		// Only execute the function after releasing the lock
 		for (auto&& func : queue)
-		{
 			func();
-			m_count++;
-		}
 		
+		m_count += queue.size();
 		return queue.size();
 	}
 	
@@ -257,16 +255,17 @@ public:
 		m_quit = true;
 	}
 
-	std::thread Spawn()
+	auto Spawn()
 	{
 		return std::thread([this]{while (Run()>0);});
 	}
 	
-	std::uint_fast64_t Count() const
+	auto Count() const
 	{
-		return m_count;
+		return m_count.load();
 	}
 	
+	// Called by ExecutorBase using CRTP
 	template <typename Func>
 	void Execute(Func&& func)
 	{
@@ -280,7 +279,7 @@ private:
 	std::condition_variable             m_cond;
 	std::deque<std::function<void()>>   m_queue;
 	bool m_quit{false};
-	std::atomic_uint_fast64_t m_count{0};
+	std::atomic<decltype(m_queue.size())> m_count{0};
 };
 
 template <typename T>

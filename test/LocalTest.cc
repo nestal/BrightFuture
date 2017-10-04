@@ -41,7 +41,7 @@ TEST_CASE( "Async simple", "[normal]" )
 		std::this_thread::sleep_for(1s);
 	}, &exe);
 
-	// Quit the worker thread
+	// Quit the worker threads
 	exe.Quit();
 	for (auto&& w : worker)
 		w.join();
