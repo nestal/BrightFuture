@@ -97,9 +97,30 @@ private:
 	std::intptr_t m_seq{0};
 };
 
+template <typename Arg, typename Function>
+struct ReturnType
+{
+	using Type = decltype(std::declval<Function>()(std::declval<Arg>()));
+};
+
 template <typename Function>
+struct ReturnType<void, Function>
+{
+	using Type = decltype(std::declval<Function>()());
+};
+
+template <typename Arg, typename Function>
 class Continuation : public TaskBase
 {
+public:
+	// Return value of "Function". It may be void.
+	using Ret = typename ReturnType<Arg, Function>::Type;
+	
+	std::future<Ret> Result()
+	{
+		return m_return.get_future();
+	}
+
 protected:
 	Continuation(Function&& func, std::future<Token>&& cont) :
 		m_function{std::move(func)}, m_cont{std::move(cont)}
@@ -125,92 +146,79 @@ protected:
 		}
 	}
 
+	std::promise<Ret>       m_return;   //!< Promise to the return value of the function to be called.
 	Function                m_function; //!< Function to be called in Execute().
 	std::future<Token>      m_cont;     //!< Token of the continuation routine that consumes the
 										//!< return value, after it is ready.
 };
 
 template <typename Arg, typename Function>
-class ConcreteTask : public Continuation<Function>
+class ConcreteTask : public Continuation<Arg, Function>
 {
+private:
+	using Base = Continuation<Arg, Function>;
+	
 public:
-	// Return value of "Function". It may be void.
-	using Ret = decltype(std::declval<Function>()(std::declval<Arg>()));
-
 	ConcreteTask(const std::shared_future<Arg>& arg, Function&& func, std::future<Token>&& cont) :
-		m_arg{arg}, Continuation<Function>{std::move(func), std::move(cont)}
+		m_arg{arg}, Base{std::move(func), std::move(cont)}
 	{
-	}
-
-	std::future<Ret> Result()
-	{
-		return m_return.get_future();
 	}
 
 	void Execute() override
 	{
 		Run();
-		Continuation<Function>::TryContinue();
+		Base::TryContinue();
 	}
 	
 private:
-	template <typename R=Ret>
+	template <typename R=typename Base::Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Run()
 	{
-		m_return.set_value(Continuation<Function>::m_function(m_arg.get()));
+		Base::m_return.set_value(Base::m_function(m_arg.get()));
 	}
 
-	template <typename R=Ret>
+	template <typename R=typename Base::Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Run()
 	{
-		Continuation<Function>::m_function(m_arg.get());
-		m_return.set_value();
+		Base::m_function(m_arg.get());
+		Base::m_return.set_value();
 	}
 
 private:
 	std::shared_future<Arg> m_arg;      //!< Argument to the function to be called in Execute().
-	std::promise<Ret>       m_return;   //!< Promise to the return value of the function to be called.
 };
 
 template <typename Function>
-class ConcreteTask<void, Function> : public Continuation<Function>
+class ConcreteTask<void, Function> : public Continuation<void, Function>
 {
+private:
+	using Base = Continuation<void, Function>;
+
 public:
-	// Return value of "Function". It may be void.
-	using Ret = decltype(std::declval<Function>()());
-
 	ConcreteTask(Function&& func, std::future<Token>&& cont) :
-		Continuation<Function>{std::move(func), std::move(cont)}
+		Base{std::move(func), std::move(cont)}
 	{
-	}
-
-	std::future<Ret> Result()
-	{
-		return m_return.get_future();
 	}
 
 	void Execute() override
 	{
 		Run();
-		Continuation<Function>::TryContinue();
+		Base::TryContinue();
 	}
 	
 private:
-	template <typename R=Ret>
+	template <typename R=typename Base::Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Run()
 	{
-		m_return.set_value(Continuation<Function>::m_function());
+		Base::m_return.set_value(Base::m_function());
 	}
 
-	template <typename R=Ret>
+	template <typename R=typename Base::Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Run()
 	{
-		Continuation<Function>::m_function();
-		m_return.set_value();
+		Base::m_function();
+		Base::m_return.set_value();
 	}
-
-private:
-	std::promise<Ret>       m_return;
 };
 
 template <typename T, typename Function>
