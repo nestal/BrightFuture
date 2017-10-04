@@ -21,8 +21,13 @@ TEST_CASE( "Async simple", "[normal]" )
 	TaskScheduler<QueueExecutor> sch;
 	
 	// use a new thread to run the executor
-	int count = 1;
-	std::thread worker{[&sch, &count]{ while (sch.GetExecutor().Run()) count++; }};
+	int count = 0;
+	std::thread worker{[&sch, &count]
+	{
+		std::size_t c;
+		while ((c = sch.Run()) > 0)
+			count += c;
+	}};
 	
 	auto future = Async([]
 	{
@@ -40,7 +45,8 @@ TEST_CASE( "Async simple", "[normal]" )
 		std::this_thread::sleep_for(1s);
 	}, &sch);
 
-	// Wait until the worker thread has nothing to do.
+	// Quit the worker thread
+	sch.Quit();
 	worker.join();
 	
 	// Run() called 3 times

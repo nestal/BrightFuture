@@ -52,11 +52,11 @@ struct Token
 };
 
 template <typename Executor>
-class TaskScheduler : public TaskSchedulerBase
+class TaskScheduler : public TaskSchedulerBase, public Executor
 {
 public:
 	template <typename... Arg>
-	explicit TaskScheduler(Arg... arg) : m_executor{std::forward<Arg>(arg)...}
+	explicit TaskScheduler(Arg... arg) : Executor{std::forward<Arg>(arg)...}
 	{
 	}
 
@@ -81,36 +81,32 @@ public:
 			}
 		}
 		
-		// m_task_mutex does not protect the m_executor, which is thread-safe.
+		// m_task_mutex does not protect m_executor, which is thread-safe.
 		if (task)
 			Execute(std::move(task));
 	}
 
 	void Execute(std::shared_ptr<TaskBase>&& task) override
 	{
-		m_executor([task=std::move(task)]{ task->Execute(); });
-	}
-
-	std::size_t Count() const
-	{
-		return m_tasks.size();
-	}
-	
-	Executor& GetExecutor()
-	{
-		return m_executor;
+		Executor::Execute([task=std::move(task)]{ task->Execute(); });
 	}
 
 private:
-	//! Executor is thread-safe. There is no need to protect it with a mutex.
-	Executor    m_executor;
-	
 	std::mutex  m_task_mutex;
 	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
 
-inline void NotifyTaskFinished(std::future<Token>& token)
+/**
+ * \brief Call the continuation routine specified by \a token
+ * \param token The future to token to the continuation routine
+ *
+ * Token represent a continuation routine in an executor. This function tries to call the continuation
+ * routine specified by a Token. If the token is not ready yet, that means the continuation routine
+ * is not specified yet, i.e. Future::Then() is not yet called. In this case we do nothing here, the
+ * continuation routine will be scheduled later when Future::Then() is called.
+ */
+inline void TryContinue(std::future<Token>& token)
 {
 	assert(token.valid());
 	if (token.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
@@ -141,7 +137,7 @@ public:
 	void Execute() override
 	{
 		Run();
-		NotifyTaskFinished(m_cont);
+		TryContinue(m_cont);
 	}
 	
 private:
@@ -186,7 +182,7 @@ public:
 	void Execute() override
 	{
 		Run();
-		NotifyTaskFinished(m_cont);
+		TryContinue(m_cont);
 	}
 	
 private:
@@ -220,39 +216,44 @@ class QueueExecutor
 public:
 	QueueExecutor() = default;
 	
+	std::size_t Run()
+	{
+		// Grab the whole queue while holding the lock, and then iterate
+		// each function in the queue after releasing the lock.
+		std::deque<std::function<void()>> queue;
+		{
+			std::unique_lock<std::mutex> lock{m_mux};
+			m_cond.wait(lock, [this] { return !m_queue.empty() || m_quit; });
+			queue.swap(m_queue);
+		}
+		
+		// Only execute the function after releasing the lock
+		for (auto&& func : queue)
+			func();
+		
+		return queue.size();
+	}
+	
+	void Quit()
+	{
+		std::unique_lock<std::mutex> lock{m_mux};
+		m_quit = true;
+	}
+	
+protected:
 	template <typename Func>
-	void operator()(Func&& func)
+	void Execute(Func&& func)
 	{
 		std::unique_lock<std::mutex> lock{m_mux};
 		m_queue.push_back(std::forward<Func>(func));
 		m_cond.notify_one();
 	}
 	
-	bool Run()
-	{
-		std::function<void()> func;
-		{
-			std::unique_lock<std::mutex> lock{m_mux};
-			m_cond.wait(lock, [this] { return !m_queue.empty(); });
-			
-			assert(!m_queue.empty());
-			func = std::move(m_queue.front());
-			m_queue.pop_front();
-		}
-		
-		// Only execute the function after releasing the lock
-		if (func)
-			func();
-		
-		// func() may add functions to the queue, so need to check again.
-		std::unique_lock<std::mutex> lock{m_mux};
-		return !m_queue.empty();
-	}
-	
 private:
 	std::mutex                          m_mux;
 	std::condition_variable             m_cond;
 	std::deque<std::function<void()>>   m_queue;
+	bool m_quit{false};
 };
 
 template <typename T>
@@ -264,7 +265,7 @@ public:
 	// move only type
 	Future(Future&&) noexcept = default;
 	Future(const Future&) = delete;
-	Future& operator=(Future&&) = default;
+	Future& operator=(Future&&) noexcept= default;
 	Future& operator=(const Future&) = delete;
 	
 	explicit Future(std::future<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
@@ -274,6 +275,14 @@ public:
 	}
 	~Future()
 	{
+		// This is a bit tricky. If the future is destroyed without called Then(), then
+		// no one will set the m_token promise. When the executor finishes running the
+		// async function, it will need to wait for m_token to signal the continuation
+		// routine to be called. If we have destroyed the m_token promise already,
+		// the future to m_token will throw a broken_promise exception. We can't let
+		// that happen.
+		// So we need to check if Then() is called, and set the m_token promise to a
+		// null token to tell the executor that no continuation routine is needed.
 		if (m_shared_state.valid())
 			m_token.set_value({});
 	}
