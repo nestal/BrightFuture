@@ -17,6 +17,8 @@
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+#include <algorithm>
 
 namespace BrightFuture {
 
@@ -136,7 +138,7 @@ protected:
 	void TryContinue()
 	{
 		assert(m_cont.valid());
-		if (m_cont.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		if (m_cont.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
 		{
 			auto t = m_cont.get();
 			if (t.host)
@@ -225,6 +227,23 @@ auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Tok
 	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
+class DefaultExecutor : public ExecutorBase<DefaultExecutor>
+{
+public:
+	// Called by ExecutorBase using CRTP
+	template <typename Func>
+	void Execute(Func&& func)
+	{
+		std::thread{std::forward<Func>(func)}.detach();
+	}
+	
+	static DefaultExecutor* Instance()
+	{
+		static DefaultExecutor exe;
+		return &exe;
+	}
+};
+
 class QueueExecutor : public ExecutorBase<QueueExecutor> // CRTP
 {
 public:
@@ -259,6 +278,13 @@ public:
 	auto Spawn()
 	{
 		return std::thread([this]{while (Run()>0);});
+	}
+	
+	auto Spawn(std::size_t count)
+	{
+		std::vector<std::thread> threads;
+		std::generate_n(std::back_inserter(threads), count, [this]{return Spawn();});
+		return threads;
 	}
 	
 	auto Count() const
@@ -316,7 +342,7 @@ public:
 	}
 
 	template <typename Func>
-	auto then(Func&& continuation, Executor *host)
+	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
 	{
 		// The promise of the next continuation routine's token. It is not _THIS_ continuation
 		// routine's token. We are adding the _THIS_ continuation routine (i.e. the "continuation"
@@ -343,7 +369,7 @@ public:
 		// "arg" is the argument of the continuation function, i.e. the result of the previous async
 		// call. If it is ready, that means the previous async call is finished. We can directly
 		// invoke the continuation function here.
-		if (arg.wait_for(std::chrono::system_clock::duration::zero()) == std::future_status::ready)
+		if (arg.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
 			host->Schedule(token);
 		else
 			m_token.set_value(token);
@@ -373,6 +399,16 @@ public:
 		m_shared_state.wait();
 	}
 	
+	bool valid() const
+	{
+		return m_shared_state.valid();
+	}
+	
+	bool is_ready() const
+	{
+		return m_shared_state.wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
+	}
+	
 	template <typename Rep, typename Ratio>
 	std::future_status wait_for(const std::chrono::duration<Rep, Ratio>& duration)
 	{
@@ -397,7 +433,7 @@ private:
 };
 
 template <typename Func>
-auto async(Func&& func, Executor *exe)
+auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 {
 	using T = decltype(func());
 	

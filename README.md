@@ -28,12 +28,12 @@ int main()
 	// Creates an executor to run the callbacks
 	QueueExecutor exe;
 	
-	// Use another thread to run the executor. These worker thread will
+	// Spawn 3 threads to run the executor. These worker threads will
 	// block until we call Quit() on the QueueExecutor.
-	std::thread worker = exe.Spawn();
+	auto workers = exe.Spawn(3);
 	
 	// Run a task asynchronously. Returns a future to the result.
-	auto future = Async([]
+	auto future = async([]
 	{
 		std::this_thread::sleep_for(2s);
 		return 100;
@@ -44,19 +44,19 @@ int main()
 	// routine is the return value of the async task (i.e. 100).
 	// The continuation routine will be run in the thread specified
 	// by the executor (i.e. sch).
-	future.Then([](int val)
+	future.then([](int val)
 	{
 		std::cout << "We should be 100: " << val << std::endl;
 		return std::string{"abc"};
 	}, &exe).
 	
-	// The return value of Then() is another future, which refers to
+	// The return value of then() is another future, which refers to
 	// the return value of the previous continuation routine. We can
 	// attach another continuation routine to this returned future
 	// to be run after the previous continuation routine finishes.
 	// The argument of this continuation routine is the return value
 	// of the previous continuation routine.
-	Then([](const std::string& s)
+	then([](const std::string& s)
 	{
 		std::cout << "The next result is a string " << s << std::endl;
 	}, &exe);}
@@ -66,6 +66,17 @@ int main()
 	worker.join();
 }
 ```
+
+# Requirement
+
+A C++14 compiler and standard library.
+
+C++14 is used in this project for:
+*   [`auto` return value for functions](https://isocpp.org/wiki/faq/cpp14-language#generalized-return)
+*   [Generalized lambda captures](https://isocpp.org/wiki/faq/cpp14-language#lambda-captures)
+
+Both features are not mandatory for implementating futures. It just make
+the code shorter and easier to read.
 
 # Download
 

@@ -21,9 +21,7 @@ TEST_CASE( "Async simple", "[normal]" )
 	QueueExecutor exe;
 	
 	// use two new threads to run the executor
-	std::vector<std::thread> worker;
-	worker.push_back(exe.Spawn());
-	worker.push_back(exe.Spawn());
+	auto worker = exe.Spawn(2);
 	
 	auto future = async([]
 	{
