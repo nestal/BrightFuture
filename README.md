@@ -18,7 +18,7 @@ this small library is to fill that gap.
 
 # Usage
 
-```$C++
+```C++
 #include "BrightFuture.hh"
 
 using namespace BrightFuture;
