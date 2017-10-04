@@ -16,16 +16,16 @@
 using namespace BrightFuture;
 using namespace std::chrono_literals;
 
-TEST_CASE( "Async simple", "[normal]" )
+TEST_CASE( "Simple async multithread case", "[normal]" )
 {
 	QueueExecutor exe;
 	
 	// use two new threads to run the executor
 	auto worker = exe.Spawn(2);
-	
+
 	auto future = async([]
 	{
-		std::this_thread::sleep_for(2s);
+		std::this_thread::sleep_for(100ms);
 		return 100;
 	}, &exe);
 	
@@ -36,7 +36,7 @@ TEST_CASE( "Async simple", "[normal]" )
 	}, &exe).then([](const std::string& s)
 	{
 		REQUIRE(s == "abc");
-		std::this_thread::sleep_for(1s);
+		std::this_thread::sleep_for(200ms);
 	}, &exe);
 
 	// Quit the worker threads
@@ -46,4 +46,34 @@ TEST_CASE( "Async simple", "[normal]" )
 	
 	// Run() called 3 times
 	REQUIRE(exe.Count() == 3U);
+}
+
+TEST_CASE( "Simple async single thread case", "[normal]" )
+{
+	QueueExecutor exe;
+	
+	bool executed{false};
+	auto future = async([&executed]
+	{
+		std::this_thread::sleep_for(200ms);
+		executed = true;
+		return 0.5;
+	}, &exe);
+	
+	REQUIRE(!executed);
+	REQUIRE(exe.Run() == 1);
+	REQUIRE(executed);
+	REQUIRE(exe.Count() == 1);
+	
+	executed = false;
+	future.then([&executed](double val)
+	{
+		REQUIRE(val == 0.5);
+		executed = true;
+	}, &exe);
+	
+	REQUIRE(!executed);
+	REQUIRE(exe.Run() == 1);
+	REQUIRE(executed);
+	REQUIRE(exe.Count() == 2);
 }

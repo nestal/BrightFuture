@@ -8,7 +8,7 @@ find_package(Doxygen)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
-set(SOURCE_FILES test/main.cpp BrightFuture.hh test/catch.hpp test/LocalTest.cc)
+set(SOURCE_FILES test/main.cc BrightFuture.hh test/catch.hpp test/LocalTest.cc)
 add_executable(BrightFuture ${SOURCE_FILES})
 target_link_libraries(BrightFuture Threads::Threads)
 
