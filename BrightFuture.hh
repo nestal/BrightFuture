@@ -11,11 +11,12 @@
 
 #pragma once
 
+#include <cassert>
+#include <deque>
 #include <future>
-#include <utility>
 #include <type_traits>
 #include <unordered_map>
-#include <cassert>
+#include <utility>
 
 namespace BrightFuture {
 
@@ -208,13 +209,41 @@ auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Tok
 	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
-class ThreadExecutor : public Executor
+class QueueExecutor : public Executor
 {
 public:
+	QueueExecutor() = default;
+	
 	void Execute(const std::function<void()>& func) override
 	{
-		std::thread{func}.detach();
+		std::unique_lock<std::mutex> lock{m_mux};
+		m_queue.push_back(func);
+		m_cond.notify_one();
 	}
+	
+	bool Run()
+	{
+		std::function<void()> func;
+		{
+			std::unique_lock<std::mutex> lock{m_mux};
+			m_cond.wait(lock, [this] { return !m_queue.empty(); });
+			
+			assert(!m_queue.empty());
+			func = std::move(m_queue.front());
+			m_queue.pop_front();
+		}
+		
+		// Only execute the function after releasing the lock
+		if (func)
+			func();
+		
+		return !m_queue.empty();
+	}
+	
+private:
+	std::mutex                          m_mux;
+	std::condition_variable             m_cond;
+	std::deque<std::function<void()>>   m_queue;
 };
 
 template <typename T>

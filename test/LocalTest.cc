@@ -12,14 +12,15 @@
 #include "BrightFuture.hh"
 
 #include "catch.hpp"
-#include <iostream>
 
 using namespace BrightFuture;
 using namespace std::chrono_literals;
 
 TEST_CASE( "Async simple", "[normal]" )
 {
-	TaskScheduler sch{std::make_unique<ThreadExecutor>()};
+	auto exe_up = std::make_unique<QueueExecutor>();
+	auto exe    = exe_up.get();
+	TaskScheduler sch{std::move(exe_up)};
 	
 	auto future = Async([]
 	{
@@ -33,14 +34,14 @@ TEST_CASE( "Async simple", "[normal]" )
 		return std::string{"abc"};
 	}, &sch).Then([](const std::string& s)
 	{
-		std::cout << "then2 " << s << std::endl;
 		REQUIRE(s == "abc");
 		std::this_thread::sleep_for(1s);
 	}, &sch);
-	
-	using namespace std::chrono_literals;
-	while (sch.Count() > 0)
-		std::this_thread::sleep_for(1s);
 
-	std::cout << "quitting" << std::endl;
+	int count = 1;
+	while (exe->Run())
+		count++;
+	
+	// Run() called 3 times
+	REQUIRE(count == 3);
 }
