@@ -85,7 +85,7 @@ public:
 
 	void Execute(std::shared_ptr<TaskBase>&& task) override
 	{
-		// CRTP
+		// Use CRTP to call ConcreteExecutor::Execute().
 		static_cast<ConcreteExecutor*>(this)->Execute([task=std::move(task)]{ task->Execute(); });
 	}
 
@@ -225,7 +225,7 @@ auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Tok
 	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
-class QueueExecutor : public ExecutorBase<QueueExecutor>
+class QueueExecutor : public ExecutorBase<QueueExecutor> // CRTP
 {
 public:
 	QueueExecutor() = default;
@@ -243,7 +243,10 @@ public:
 		
 		// Only execute the function after releasing the lock
 		for (auto&& func : queue)
+		{
 			func();
+			m_count++;
+		}
 		
 		return queue.size();
 	}
@@ -254,6 +257,16 @@ public:
 		m_quit = true;
 	}
 
+	std::thread Spawn()
+	{
+		return std::thread([this]{while (Run()>0);});
+	}
+	
+	std::uint_fast64_t Count() const
+	{
+		return m_count;
+	}
+	
 	template <typename Func>
 	void Execute(Func&& func)
 	{
@@ -267,6 +280,7 @@ private:
 	std::condition_variable             m_cond;
 	std::deque<std::function<void()>>   m_queue;
 	bool m_quit{false};
+	std::atomic_uint_fast64_t m_count{0};
 };
 
 template <typename T>

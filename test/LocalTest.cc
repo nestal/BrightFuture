@@ -20,14 +20,10 @@ TEST_CASE( "Async simple", "[normal]" )
 {
 	QueueExecutor exe;
 	
-	// use a new thread to run the executor
-	int count = 0;
-	std::thread worker{[&exe, &count]
-	{
-		std::size_t c;
-		while ((c = exe.Run()) > 0)
-			count += c;
-	}};
+	// use two new threads to run the executor
+	std::vector<std::thread> worker;
+	worker.push_back(exe.Spawn());
+	worker.push_back(exe.Spawn());
 	
 	auto future = Async([]
 	{
@@ -47,8 +43,9 @@ TEST_CASE( "Async simple", "[normal]" )
 
 	// Quit the worker thread
 	exe.Quit();
-	worker.join();
+	for (auto&& w : worker)
+		w.join();
 	
 	// Run() called 3 times
-	REQUIRE(count == 3);
+	REQUIRE(exe.Count() == 3U);
 }
