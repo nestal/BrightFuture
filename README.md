@@ -64,10 +64,20 @@ int main()
 	then([](const std::string& s)
 	{
 		assert(s == "abc"s);
-	}, &exe);}
+	}, &exe).
 	
-	// Quit the executor and the worker thread
+	// You can also wait synchronously for a future to be fulfilled.
+	// Here in this example we want the main thread to block until
+	// the continuation routines finishes, so we take the future
+	// returned by the previous then() and call wait() on it.
+	wait();
+	
+	// The threads are waiting for work to be submitted to the executor
+	// (via async()). We call Quit() to instruct it to stop waiting.
 	exe.Quit();
+	
+	// Now the worker threads should have already exited. We can safely
+	// join() them without blocking.
 	for (auto&& w : worker)
 		w.join();
 }

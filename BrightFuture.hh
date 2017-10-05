@@ -345,11 +345,6 @@ public:
 		if (m_shared_state.valid())
 			m_token.set_value({});
 	}
-
-	auto GetToken()
-	{
-		return m_token.get_future();
-	}
 	
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
@@ -470,62 +465,71 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	return future<T>::MakeFuture(std::move(result), std::move(cont));
 }
 
+template <typename T>
+class IntermediateResultOfWhenAll
+{
+public:
+	explicit IntermediateResultOfWhenAll(std::future<Token>&& token, std::size_t total) :
+		m_token{std::move(token)}, m_total{total}
+	{
+	}
+	
+	void Process(T&& val, std::size_t index)
+	{
+		// The executor may run this function in different threads.
+		// make sure they don't step in each others.
+		std::unique_lock<std::mutex> lock{m_mux};
+		
+		m_values.emplace(index, std::move(val));
+		if (m_values.size() == m_total)
+		{
+			std::vector<T> result;
+			for (auto&& p : m_values)
+				result.push_back(std::move(p.second));
+			m_promise.set_value(std::move(result));
+			
+			if (m_token.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
+			{
+				auto t = m_token.get();
+				if (t.host)
+					t.host->Schedule(t);
+			}
+		}
+	}
+	
+	auto Result()
+	{
+		return m_promise.get_future();
+	}
+	
+private:
+	std::future<Token>              m_token;
+	std::promise<std::vector<T>>    m_promise;
+	std::map<std::size_t, T>        m_values;
+	std::size_t m_total{};
+	std::mutex  m_mux;
+};
+
 template < class InputIt >
 auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Instance())
 {
 	using T = typename std::iterator_traits<InputIt>::value_type::value_type;
 	
-	struct SharedResult
-	{
-		std::promise<std::vector<T>>    promise;
-		std::future<Token>              token;
-		std::map<std::size_t, T>        values;
-		std::size_t size{};
-		std::mutex  mux;
-	};
-	auto intermediate  = std::make_shared<SharedResult>();
-	
-	// copy all futures to a vector first, because we need to know how many
+	// move all futures to a vector first, because we need to know how many
 	// and InputIt only allows us to iterate them once.
 	std::vector<future<T>> futures;
 	for (auto it = first ; it != last; it++)
 		futures.push_back(std::move(*it));
-	intermediate->size = futures.size();
 	
-	future<std::vector<T>> future_vec{intermediate->promise.get_future()};
-	intermediate->token = future_vec.GetToken();
+	std::promise<Token> token_promise;
+	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(token_promise.get_future(), futures.size());
+	future<std::vector<T>> future_vec{intermediate->Result(), std::move(token_promise)};
 	
 	for (auto i = futures.size()*0 ; i < futures.size(); i++)
 		futures[i].then([intermediate, i, exe](auto&& val)
 		{
-			std::cout << val << " is ready" << std::endl;
-			
-			// The executor may run this function in different threads.
-			// make sure they don't step in each others.
-			std::unique_lock<std::mutex> lock{intermediate->mux};
-			
-			intermediate->values.emplace(i, std::move(val));
-			std::cout << "size = " << intermediate->values.size() << " " << intermediate->size << std::endl;
-			
-			if (intermediate->values.size() == intermediate->size)
-			{
-				std::vector<T> result;
-				for (auto&& p : intermediate->values)
-					result.push_back(std::move(p.second));
-				intermediate->promise.set_value(std::move(result));
-				
-				std::cout << "setting promise " << std::endl;
-				
-				if (intermediate->token.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
-				{
-					auto t = intermediate->token.get();
-					if (t.host)
-						t.host->Schedule(t);
-				}
-			}
-			
+			intermediate->Process(std::move(val), i);
 		}, exe);
-
 	
 	return future_vec;
 }
