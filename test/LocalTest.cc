@@ -29,7 +29,7 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 	auto future = async([tids]
 	{
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
-		std::this_thread::sleep_for(100ms);
+		std::this_thread::sleep_for(1000ms);
 		return 100;
 	}, &exe);
 	
@@ -50,7 +50,7 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 	for (auto&& w : worker)
 		w.join();
 	
-	// Run() called 3 times
+	// Run() called 3 times: once for async() callback, twice for then() callback
 	REQUIRE(exe.Count() == 3U);
 }
 
@@ -126,7 +126,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	std::vector<future<int>> futures;
 	futures.push_back(async([]{return 100;}, &exe));
 	futures.push_back(async([]{return 101;}, &exe));
-	when_all(futures.begin(), futures.end()).then([](std::vector<int>&& ints)
+	when_all(futures.begin(), futures.end(), &exe).then([](std::vector<int>&& ints)
 	{
 		REQUIRE(ints.size() == 2);
 		REQUIRE(ints.front() == 100);
