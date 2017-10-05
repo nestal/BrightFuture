@@ -124,13 +124,15 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	auto thread = exe.Spawn();
 	
 	std::vector<future<int>> futures;
-	futures.push_back(async([]{return 100;}));
-	futures.push_back(async([]{return 101;}));
-/*	when_all(futures.begin(), futures.end()).then([](std::vector<int>&& ints)
+	futures.push_back(async([]{return 100;}, &exe));
+	futures.push_back(async([]{return 101;}, &exe));
+	when_all(futures.begin(), futures.end()).then([](std::vector<int>&& ints)
 	{
 		REQUIRE(ints.size() == 2);
 		REQUIRE(ints.front() == 100);
 		REQUIRE(ints.back() == 101);
-	});
-	thread.join();*/
+	}, &exe);
+	
+	exe.Quit();
+	thread.join();
 }

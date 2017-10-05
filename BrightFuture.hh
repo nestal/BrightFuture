@@ -345,6 +345,11 @@ public:
 			m_token.set_value({});
 	}
 
+	auto GetToken()
+	{
+		return m_token.get_future();
+	}
+	
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
 	{
@@ -361,7 +366,6 @@ public:
 		// Prepare the continuation routine as a task. The function of the task is of course
 		// the continuation routine itself. The argument of the continuation routine is the
 		// result of the last async call, i.e. the variable referred by the m_shared_state future.
-//		auto continuation_arg  = m_shared_state.share();
 		bool is_ready = (m_shared_state.wait_for(std::chrono::seconds::zero()) == std::future_status::ready);
 		auto continuation_task = MakeTask(std::move(m_shared_state), std::forward<Func>(continuation), next_token.get_future());
 		
@@ -473,6 +477,7 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	struct SharedResult
 	{
 		std::promise<std::vector<T>>    promise;
+		std::future<Token>              token;
 		std::map<std::size_t, T>        values;
 		std::size_t size{};
 		std::mutex  mux;
@@ -487,8 +492,11 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 		futures.push_back(std::move(*it));
 	intermediate->size = futures.size();
 	
+	future<std::vector<T>> future_vec{intermediate->promise.get_future()};
+	intermediate->token = future_vec.GetToken();
+	
 	for (auto&& future : futures)
-		future.then([intermediate, current_index](auto&& val)
+		future.then([intermediate, current_index, exe](auto&& val)
 		{
 			// The executor may run this function in different threads.
 			// make sure they don't step in each others.
@@ -501,10 +509,16 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 				for (auto&& p : intermediate->values)
 					result.push_back(std::move(p.second));
 				intermediate->promise.set_value(std::move(result));
+				if (intermediate->token.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
+				{
+					auto t = intermediate->token.get();
+					if (t.host)
+						t.host->Schedule(t);
+				}
 			}
 		}, exe);
 
-	return future<std::vector<T>>{intermediate->promise.get_future()};
+	return future_vec;
 }
 
 } // end of namespace
