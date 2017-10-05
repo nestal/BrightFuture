@@ -9,6 +9,7 @@
 // Created by nestal on 10/2/17.
 //
 
+#include <iostream>
 #include "BrightFuture.hh"
 
 #include "catch.hpp"
@@ -43,7 +44,7 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 		REQUIRE(s == "abc");
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		std::this_thread::sleep_for(200ms);
-	}, &exe);
+	}, &exe).wait();
 
 	// Quit the worker threads
 	exe.Quit();
@@ -110,7 +111,7 @@ TEST_CASE( "Two executors", "[normal]" )
 	{
 		REQUIRE(s == "string"s);
 		REQUIRE(std::this_thread::get_id() == tid);
-	}, &exe2);
+	}, &exe2).wait();
 	
 	exe1.Quit();
 	exe2.Quit();
@@ -131,7 +132,8 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		REQUIRE(ints.size() == 2);
 		REQUIRE(ints.front() == 100);
 		REQUIRE(ints.back() == 101);
-	}, &exe);
+		std::cout << "done" << std::endl;
+	}, &exe).wait();
 	
 	exe.Quit();
 	thread.join();

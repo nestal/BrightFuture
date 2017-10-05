@@ -274,6 +274,7 @@ public:
 	void Quit()
 	{
 		m_quit = true;
+		m_cond.notify_all();
 	}
 
 	auto Spawn()
@@ -483,7 +484,6 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 		std::mutex  mux;
 	};
 	auto intermediate  = std::make_shared<SharedResult>();
-	auto current_index = intermediate->values.size();
 	
 	// copy all futures to a vector first, because we need to know how many
 	// and InputIt only allows us to iterate them once.
@@ -495,20 +495,27 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	future<std::vector<T>> future_vec{intermediate->promise.get_future()};
 	intermediate->token = future_vec.GetToken();
 	
-	for (auto&& future : futures)
-		future.then([intermediate, current_index, exe](auto&& val)
+	for (auto i = futures.size()*0 ; i < futures.size(); i++)
+		futures[i].then([intermediate, i, exe](auto&& val)
 		{
+			std::cout << val << " is ready" << std::endl;
+			
 			// The executor may run this function in different threads.
 			// make sure they don't step in each others.
 			std::unique_lock<std::mutex> lock{intermediate->mux};
 			
-			intermediate->values.emplace(current_index, std::move(val));
+			intermediate->values.emplace(i, std::move(val));
+			std::cout << "size = " << intermediate->values.size() << " " << intermediate->size << std::endl;
+			
 			if (intermediate->values.size() == intermediate->size)
 			{
 				std::vector<T> result;
 				for (auto&& p : intermediate->values)
 					result.push_back(std::move(p.second));
 				intermediate->promise.set_value(std::move(result));
+				
+				std::cout << "setting promise " << std::endl;
+				
 				if (intermediate->token.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
 				{
 					auto t = intermediate->token.get();
@@ -516,8 +523,10 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 						t.host->Schedule(t);
 				}
 			}
+			
 		}, exe);
 
+	
 	return future_vec;
 }
 
