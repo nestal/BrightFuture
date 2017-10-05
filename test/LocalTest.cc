@@ -117,3 +117,20 @@ TEST_CASE( "Two executors", "[normal]" )
 	thread1.join();
 	thread2.join();
 }
+
+TEST_CASE( "WhenAll 2 promises", "[normal]" )
+{
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
+	
+	std::vector<future<int>> futures;
+	futures.push_back(async([]{return 100;}));
+	futures.push_back(async([]{return 101;}));
+	when_all(futures.begin(), futures.end()).then([](std::vector<int> ints)
+	{
+		REQUIRE(ints.size() == 2);
+		REQUIRE(ints.front() == 100);
+		REQUIRE(ints.back() == 101);
+	});
+	thread.join();
+}

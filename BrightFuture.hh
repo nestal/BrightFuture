@@ -14,6 +14,7 @@
 #include <cassert>
 #include <deque>
 #include <future>
+#include <map>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -313,6 +314,9 @@ template <typename T>
 class future
 {
 public:
+	using value_type = T;
+	
+public:
 	future() = default;
 	
 	// move only type
@@ -382,7 +386,7 @@ public:
 		
 		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
 	}
-
+	
 	std::shared_future<T> share()
 	{
 		assert(valid());
@@ -458,6 +462,48 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	exe->Execute(std::move(task));
 	
 	return future<T>::MakeFuture(std::move(result), std::move(cont));
+}
+
+template < class InputIt >
+auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Instance())
+{
+	using T = typename std::iterator_traits<InputIt>::value_type::value_type;
+	
+	struct SharedResult
+	{
+		std::promise<std::vector<T>>    promise;
+		std::map<std::size_t, T>        values;
+		std::size_t size{};
+		std::mutex  mux;
+	};
+	auto intermediate  = std::make_shared<SharedResult>();
+	auto current_index = intermediate->values.size();
+	
+	// copy all futures to a vector first, because we need to know how many
+	// and InputIt only allows us to iterate them once.
+	std::vector<future<T>> futures;
+	for (auto it = first ; it != last; it++)
+		futures.push_back(std::move(*it));
+	intermediate->size = futures.size();
+	
+	for (auto&& future : futures)
+		future.then([intermediate, current_index](auto&& val)
+		{
+			// The executor may run this function in different threads.
+			// make sure they don't step in each others.
+			std::unique_lock<std::mutex> lock{intermediate->mux};
+			
+			intermediate->values.emplace(current_index, std::move(val));
+			if (intermediate->values.size() == intermediate->size)
+			{
+				std::vector<T> result;
+				for (auto&& p : intermediate->values)
+					result.push_back(std::move(p.second));
+				intermediate->promise.set_value(std::move(result));
+			}
+		}, exe);
+
+	return future<std::vector<T>>{intermediate->promise.get_future()};
 }
 
 } // end of namespace
