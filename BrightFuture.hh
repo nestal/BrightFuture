@@ -526,7 +526,7 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	future<std::vector<T>> future_vec{intermediate->Result(), std::move(token_promise)};
 	
 	for (auto i = futures.size()*0 ; i < futures.size(); i++)
-		futures[i].then([intermediate, i, exe](auto&& val)
+		futures[i].then([intermediate, i](auto&& val)
 		{
 			intermediate->Process(std::move(val), i);
 		}, exe);
