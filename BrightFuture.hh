@@ -101,13 +101,13 @@ private:
 template <typename Arg, typename Callable>
 struct ReturnType
 {
-	using Type = decltype(std::declval<Callable>()(std::declval<Arg>()));
+	using Type = typename std::result_of<Callable(Arg&&)>::type;
 };
 
 template <typename Callable>
 struct ReturnType<void, Callable>
 {
-	using Type = decltype(std::declval<Callable>()());
+	using Type = typename std::result_of<Callable()>::type;
 };
 
 template <typename Arg, typename Callable>
@@ -160,8 +160,8 @@ private:
 	using Base = Continuation<Arg, Function>;
 	
 public:
-	ConcreteTask(const std::shared_future<Arg>& arg, Function&& func, std::future<Token>&& cont) :
-		m_arg{arg}, Base{std::move(func), std::move(cont)}
+	ConcreteTask(std::future<Arg>&& arg, Function&& func, std::future<Token>&& cont) :
+		m_arg{std::move(arg)}, Base{std::move(func), std::move(cont)}
 	{
 	}
 
@@ -186,7 +186,7 @@ private:
 	}
 
 private:
-	std::shared_future<Arg> m_arg;      //!< Argument to the function to be called in Execute().
+	std::future<Arg> m_arg;      //!< Argument to the function to be called in Execute().
 };
 
 template <typename Function>
@@ -223,7 +223,7 @@ private:
 };
 
 template <typename T, typename Function>
-auto MakeTask(const std::shared_future<T>& arg, Function&& func, std::future<Token>&& cont)
+auto MakeTask(std::future<T>&& arg, Function&& func, std::future<Token>&& cont)
 {
 	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
@@ -361,8 +361,9 @@ public:
 		// Prepare the continuation routine as a task. The function of the task is of course
 		// the continuation routine itself. The argument of the continuation routine is the
 		// result of the last async call, i.e. the variable referred by the m_shared_state future.
-		auto continuation_arg  = m_shared_state.share();
-		auto continuation_task = MakeTask(continuation_arg, std::forward<Func>(continuation), next_token.get_future());
+//		auto continuation_arg  = m_shared_state.share();
+		bool is_ready = (m_shared_state.wait_for(std::chrono::seconds::zero()) == std::future_status::ready);
+		auto continuation_task = MakeTask(std::move(m_shared_state), std::forward<Func>(continuation), next_token.get_future());
 		
 		// We also need to know the promise to return value of the continuation routine as well.
 		// It will be passed to the future returned by this function.
@@ -379,7 +380,7 @@ public:
 		// "arg" is the argument of the continuation function, i.e. the result of the previous async
 		// call. If it is ready, that means the previous async call is finished. We can directly
 		// invoke the continuation function here.
-		if (continuation_arg.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
+		if (is_ready)
 			host->Schedule(continuation_token);
 		else
 			m_token.set_value(continuation_token);
