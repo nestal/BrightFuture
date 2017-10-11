@@ -130,42 +130,41 @@ TEST_CASE( "Two executors", "[normal]" )
 TEST_CASE( "WhenAll 2 promises", "[normal]" )
 {
 	using namespace std::chrono_literals;
-	QueueExecutor exe;
-	auto thread = exe.Spawn();
+	QueueExecutor exe1, exe2;
+	auto thread1 = exe1.Spawn();
+	auto thread2 = exe2.Spawn();
 	
 	future<bool> result;
 	
 	SECTION("2 future<int>'s")
 	{
 		std::vector<future<int>> futures;
-		futures.push_back(async([] { return 100; }, &exe));
-		futures.push_back(async([] { return 101; }, &exe));
+		futures.push_back(async([] { return 100; }, &exe1));
+		futures.push_back(async([] { return 101; }, &exe2));
 		
-//		std::this_thread::sleep_for(100ms);
-		
-		result = when_all(futures.begin(), futures.end(), &exe).then(
+		result = when_all(futures.begin(), futures.end(), &exe1).then(
 			[](std::vector<int>&& ints)
 			{
 				REQUIRE(ints.size() == 2);
 				REQUIRE(ints.front() == 100);
 				REQUIRE(ints.back() == 101);
 				return true;
-			}, &exe
+			}, &exe2
 		);
 	}
 	SECTION("2 shared_future<int>'s")
 	{
 		std::vector<shared_future<int>> futures;
-		futures.push_back(async([] { return 100; }, &exe).share());
-		futures.push_back(async([] { return 101; }, &exe).share());
-		result = when_all(futures.begin(), futures.end(), &exe).then(
+		futures.push_back(async([] { return 100; }, &exe1).share());
+		futures.push_back(async([] { return 101; }, &exe2).share());
+		result = when_all(futures.begin(), futures.end(), &exe1).then(
 			[](std::vector<int>&& ints)
 			{
 				REQUIRE(ints.size() == 2);
 				REQUIRE(ints.front() == 100);
 				REQUIRE(ints.back() == 101);
 				return true;
-			}, &exe
+			}, &exe2
 		);
 	}
 	
@@ -173,8 +172,10 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	REQUIRE(result.get());
 //	std::cout << "wait OK" << std::endl;
 	
-	exe.Quit();
-	thread.join();
+	exe1.Quit();
+	exe2.Quit();
+	thread1.join();
+	thread2.join();
 }
 
 

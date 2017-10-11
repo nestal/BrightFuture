@@ -359,7 +359,7 @@ private:
 template <typename T>
 class future;
 
-template <typename T, template <typename> class InternalFuture, typename Inherited>
+template <typename T, typename Inherited>
 class BrightFuture
 {
 public:
@@ -370,9 +370,7 @@ public:
 	BrightFuture(BrightFuture&&) noexcept = default;
 	BrightFuture& operator=(BrightFuture&&) noexcept = default;
 	
-	explicit BrightFuture(InternalFuture<T>&& shared_state, TokenQueuePtr token) noexcept :
-		m_shared_state{std::move(shared_state)},
-		m_token{std::move(token)}
+	explicit BrightFuture(TokenQueuePtr token) noexcept : m_token{std::move(token)}
 	{
 	}
 	~BrightFuture() = default;
@@ -393,7 +391,7 @@ public:
 		// Prepare the continuation routine as a task. The function of the task is of course
 		// the continuation routine itself. The argument of the continuation routine is the
 		// result of the last async call, i.e. the variable referred by the m_shared_state future.
-		auto continuation_task = MakeTask(std::move(m_shared_state), std::forward<Func>(continuation), next_token);
+		auto continuation_task = MakeTask(static_cast<Inherited*>(this)->InternalFuture(), std::forward<Func>(continuation), next_token);
 		
 		// We also need to know the promise to return value of the continuation routine as well.
 		// It will be passed to the future returned by this function.
@@ -407,44 +405,51 @@ public:
 		assert(continuation_token.host);
 		assert(continuation_token.host == host);
 
-		// "arg" is the argument of the continuation function, i.e. the result of the previous async
-		// call. If it is ready, that means the previous async call is finished. We can directly
-		// invoke the continuation function here.
+		// There is a race condition here: whether or not the last async call has finished or not.
+		
+		// If it has finished, it should have already Scheduled() all continuation tokens in the
+		// m_token queue. In this case, PushBack() will return false, indicating no one will ever
+		// look at the queue again. We need to schedule our continuation_token here.
+		
+		// Otherwise, PushBack() will returns true, that means the last async call has not finished
+		// and the continuation_token is added to the queue. In this case the token will be Scheduled()
+		// by the async call when it finishes. We don't need to call Schedule() ourselves.
 		if (!m_token->PushBack(continuation_token))
 			host->Schedule(continuation_token);
 		
+		// Finally, return the future to the return of the continuation routine to support chaining.
 		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
 	}
 
 	void wait()
 	{
 		assert(valid());
-		m_shared_state.wait();
+		static_cast<Inherited*>(this)->InternalFuture().wait();
 	}
 	
 	bool valid() const
 	{
-		return m_shared_state.valid();
+		return static_cast<const Inherited*>(this)->InternalFuture().valid() && m_token;
 	}
 	
 	bool is_ready() const
 	{
 		assert(valid());
-		return m_shared_state.wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
+		return static_cast<const Inherited*>(this)->InternalFuture().wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
 	}
 	
 	template <typename Rep, typename Ratio>
 	std::future_status wait_for(const std::chrono::duration<Rep, Ratio>& duration)
 	{
 		assert(valid());
-		return m_shared_state.wait_for(duration);
+		return static_cast<Inherited*>(this)->InternalFuture().wait_for(duration);
 	}
 	
 	template <typename Clock, typename Duration>
 	std::future_status wait_until(const std::chrono::time_point<Clock, Duration>& time_point)
 	{
 		assert(valid());
-		return m_shared_state.wait_until(time_point);
+		return static_cast<Inherited*>(this)->InternalFuture().wait_until(time_point);
 	}
 
 	template <typename Type>
@@ -454,24 +459,25 @@ public:
 	}
 
 protected:
-	InternalFuture<T>   m_shared_state;
-	TokenQueuePtr       m_token;
+	TokenQueuePtr       m_token{std::make_shared<TokenQueue>()};
 };
 
 template <typename T>
-class shared_future : public BrightFuture<T, std::shared_future, shared_future<T>>
+class shared_future : public BrightFuture<T, shared_future<T>>
 {
 public:
-	using Base = BrightFuture<T, std::shared_future, shared_future<T>>;
+	using Base = BrightFuture<T, shared_future<T>>;
 	using Base::BrightFuture;
 	
 	shared_future(shared_future&&) noexcept = default;
 	shared_future& operator=(shared_future&&) noexcept = default;
 	
-	shared_future(const shared_future& rhs)
+	shared_future(const shared_future& rhs) : Base{rhs.Base::m_token}, m_shared_state{rhs.m_shared_state}
 	{
-		Base::m_shared_state = rhs.Base::m_shared_state;
-		Base::m_token        = rhs.Base::m_token;
+	}
+	
+	shared_future(const std::shared_future<T>& sf, TokenQueuePtr&& token) : Base{std::move(token)}, m_shared_state{sf}
+	{
 	}
 	
 	shared_future<T> share()
@@ -483,47 +489,75 @@ public:
 	typename std::enable_if<std::is_void<R>::value>::type get()
 	{
 		assert(Base::valid());
-		Base::m_shared_state.get();
+		m_shared_state.get();
 	}
 	
 	template <typename R=T>
 	typename std::enable_if<!std::is_void<R>::value, const T>::type& get()
 	{
 		assert(Base::valid());
-		return Base::m_shared_state.get();
+		return m_shared_state.get();
 	}
+	
+	std::shared_future<T> InternalFuture()
+	{
+		return m_shared_state;
+	}
+	const std::shared_future<T>& InternalFuture() const
+	{
+		return m_shared_state;
+	}
+	
+private:
+	std::shared_future<T>   m_shared_state;
 };
 
 template <typename T>
-class future : public BrightFuture<T, std::future, future<T>>
+class future : public BrightFuture<T, future<T>>
 {
 public:
-	using Base = BrightFuture<T, std::future, future<T>>;
+	using Base = BrightFuture<T, future<T>>;
 	using Base::BrightFuture;
 	
 	future(future&&) noexcept = default;
 	future& operator=(future&&) noexcept = default;
 	future(const future& future) = delete;
 	future& operator=(const future&) = delete;
+
+	future(std::future<T>&& f, TokenQueuePtr&& token) : Base{std::move(token)}, m_shared_state{std::move(f)}
+	{
+	}
 	
 	shared_future<T> share()
 	{
-		return shared_future<T>{Base::m_shared_state.share(), std::move(Base::m_token)};
+		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token)};
 	}
 
 	template <typename R=T>
 	typename std::enable_if<std::is_void<R>::value>::type get()
 	{
 		assert(Base::valid());
-		Base::m_shared_state.get();
+		m_shared_state.get();
 	}
 	
 	template <typename R=T>
 	typename std::enable_if<!std::is_void<R>::value, T>::type get()
 	{
 		assert(Base::valid());
-		return Base::m_shared_state.get();
+		return m_shared_state.get();
 	}
+
+	std::future<T>&& InternalFuture()
+	{
+		return std::move(m_shared_state);
+	}
+	const std::future<T>& InternalFuture() const
+	{
+		return m_shared_state;
+	}
+	
+private:
+	std::future<T> m_shared_state;
 };
 
 template <typename Func>
