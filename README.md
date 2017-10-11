@@ -99,9 +99,6 @@ the code shorter and easier to read.
 There are a few features missing in BrightFuture that are supported by
 `std::experimental::future`:
 
-*   `shared_future::then()`: currently `BrightFuture::share()` returns
-	an normal `std::shared_future` only. There is no `then()` for
-	`std::shared_future`.
 *   Unwrapping constructor: i.e. `future<T>::future( future<future<T>&& t)`
 
 While it is not impossible to implement these features, doing so will

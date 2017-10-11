@@ -486,14 +486,15 @@ public:
 		m_token{std::move(token)}, m_total{total}
 	{
 	}
-	
-	void Process(T&& val, std::size_t index)
+
+	template <typename U>
+	void Process(U&& val, std::size_t index)
 	{
 		// The executor may run this function in different threads.
 		// make sure they don't step in each others.
 		std::unique_lock<std::mutex> lock{m_mux};
 		
-		m_values.emplace(index, std::move(val));
+		m_values.emplace(index, std::forward<U>(val));
 		if (m_values.size() == m_total)
 		{
 			std::vector<T> result;
@@ -530,9 +531,9 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	
 	// move all futures to a vector first, because we need to know how many
 	// and InputIt only allows us to iterate them once.
-	std::vector<future<T>> futures;
+	std::vector<shared_future<T>> futures;
 	for (auto it = first ; it != last; it++)
-		futures.push_back(std::move(*it));
+		futures.push_back(it->share());
 	
 	std::promise<Token> token_promise;
 	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(token_promise.get_future(), futures.size());
@@ -541,7 +542,7 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	for (auto i = futures.size()*0 ; i < futures.size(); i++)
 		futures[i].then([intermediate, i](auto&& val)
 		{
-			intermediate->Process(std::move(val), i);
+			intermediate->Process(std::forward<decltype(val)>(val), i);
 		}, exe);
 	
 	return future_vec;

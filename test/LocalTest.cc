@@ -178,7 +178,7 @@ TEST_CASE("test share() shared_future", "[normal]")
 	
 	bool run{false};
 	
-	auto future = async([]{std::this_thread::sleep_for(100ms); std::cout << "after wait" << std::endl;}, &exe).share();
+	auto future = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
 	
 	future.then([&run]{
 		run = true;
