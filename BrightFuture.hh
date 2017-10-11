@@ -54,6 +54,49 @@ struct Token
 	std::intptr_t   event;
 };
 
+class TokenQueue
+{
+public:
+	TokenQueue() = default;
+	
+	bool PushBack(const Token& tok)
+	{
+		std::unique_lock<std::mutex> lock{m_mux};
+		if (m_popped)
+			return false;
+		
+		m_queue.push_back(tok);
+		return true;
+	}
+	
+	void TryContinue()
+	{
+		for (auto&& t : Pop())
+		{
+			if (t.host)
+				t.host->Schedule(t);
+		}
+	}
+	
+private:
+	std::vector<Token> Pop()
+	{
+		std::unique_lock<std::mutex> lock{m_mux};
+		assert(!m_popped);
+		m_popped = true;
+		
+		std::vector<Token> result{std::move(m_queue)};
+		return result;
+	}
+
+private:
+	std::mutex m_mux;
+	std::vector<Token> m_queue;
+	bool m_popped{false};
+};
+
+using TokenQueuePtr = std::shared_ptr<TokenQueue>;
+
 template <typename ConcreteExecutor>
 class ExecutorBase : public Executor
 {
@@ -123,7 +166,7 @@ public:
 	}
 
 protected:
-	Continuation(Callable&& func, std::future<Token>&& cont) :
+	Continuation(Callable&& func, TokenQueuePtr cont) :
 		m_function{std::move(func)}, m_cont{std::move(cont)}
 	{
 	}
@@ -138,19 +181,13 @@ protected:
 	 */
 	void TryContinue()
 	{
-		assert(m_cont.valid());
-		if (m_cont.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
-		{
-			auto t = m_cont.get();
-			if (t.host)
-				t.host->Schedule(t);
-		}
+		m_cont->TryContinue();
 	}
 
-	std::promise<Ret>       m_return;   //!< Promise to the return value of the function to be called.
-	Callable                m_function; //!< Function to be called in Execute().
-	std::future<Token>      m_cont;     //!< Token of the continuation routine that consumes the
-										//!< return value, after it is ready.
+	std::promise<Ret>   m_return;       //!< Promise to the return value of the function to be called.
+	Callable            m_function;     //!< Function to be called in Execute().
+	TokenQueuePtr       m_cont;     //!< Token of the continuation routine that consumes the
+											//!< return value, after it is ready.
 };
 
 template <typename Arg, typename Function, template <typename> class InternalFuture>
@@ -160,8 +197,8 @@ private:
 	using Base = Continuation<Arg, Function>;
 	
 public:
-	ConcreteTask(InternalFuture<Arg>&& arg, Function&& func, std::future<Token>&& cont) :
-		Base{std::move(func), std::move(cont)}, m_arg{std::move(arg)}
+	ConcreteTask(InternalFuture<Arg>&& arg, Function&& func, const TokenQueuePtr& cont) :
+		Base{std::move(func), cont}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -196,8 +233,8 @@ private:
 	using Base = Continuation<void, Function>;
 
 public:
-	ConcreteTask(InternalFuture<void>&& arg, Function&& func, std::future<Token>&& cont) :
-		Base{std::move(func), std::move(cont)}, m_arg{std::move(arg)}
+	ConcreteTask(InternalFuture<void>&& arg, Function&& func, const TokenQueuePtr& cont) :
+		Base{std::move(func), cont}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -228,9 +265,9 @@ private:
 };
 
 template <typename T, typename Function, template <typename> class InternalFuture>
-auto MakeTask(InternalFuture<T>&& arg, Function&& func, std::future<Token>&& cont)
+auto MakeTask(InternalFuture<T>&& arg, Function&& func, const TokenQueuePtr& cont)
 {
-	return std::make_shared<ConcreteTask<T, Function, InternalFuture>>(std::move(arg), std::forward<Function>(func), std::move(cont));
+	return std::make_shared<ConcreteTask<T, Function, InternalFuture>>(std::move(arg), std::forward<Function>(func), cont);
 }
 
 class DefaultExecutor : public ExecutorBase<DefaultExecutor>
@@ -330,25 +367,12 @@ public:
 	BrightFuture(BrightFuture&&) noexcept = default;
 	BrightFuture& operator=(BrightFuture&&) noexcept = default;
 	
-	explicit BrightFuture(InternalFuture<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
+	explicit BrightFuture(InternalFuture<T>&& shared_state, TokenQueuePtr token) noexcept :
 		m_shared_state{std::move(shared_state)},
 		m_token{std::move(token)}
 	{
 	}
-	
-	~BrightFuture()
-	{
-		// This is a bit tricky. If the future is destroyed without called Then(), then
-		// no one will set the m_token promise. When the executor finishes running the
-		// async function, it will need to wait for m_token to signal the continuation
-		// routine to be called. If we have destroyed the m_token promise already,
-		// the future to m_token will throw a broken_promise exception. We can't let
-		// that happen.
-		// So we need to check if Then() is called, and set the m_token promise to a
-		// null token to tell the executor that no continuation routine is needed.
-		if (m_shared_state.valid())
-			m_token.set_value({});
-	}
+	~BrightFuture() = default;
 	
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
@@ -361,13 +385,13 @@ public:
 		//
 		// We don't know the next continuation routine's token yet. It will be known when Then()
 		// is called with the future returned by this function.
-		std::promise<Token> next_token;
+		auto next_token = std::make_shared<TokenQueue>();
 
 		// Prepare the continuation routine as a task. The function of the task is of course
 		// the continuation routine itself. The argument of the continuation routine is the
 		// result of the last async call, i.e. the variable referred by the m_shared_state future.
 		bool is_ready = (m_shared_state.wait_for(std::chrono::seconds::zero()) == std::future_status::ready);
-		auto continuation_task = MakeTask(std::move(m_shared_state), std::forward<Func>(continuation), next_token.get_future());
+		auto continuation_task = MakeTask(std::move(m_shared_state), std::forward<Func>(continuation), next_token);
 		
 		// We also need to know the promise to return value of the continuation routine as well.
 		// It will be passed to the future returned by this function.
@@ -387,7 +411,7 @@ public:
 		if (is_ready)
 			host->Schedule(continuation_token);
 		else
-			m_token.set_value(continuation_token);
+			m_token->PushBack(continuation_token);
 		
 		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
 	}
@@ -424,14 +448,14 @@ public:
 	}
 
 	template <typename Type>
-	static auto MakeFuture(std::future<Type>&& shared_state, std::promise<Token>&& token)
+	static auto MakeFuture(std::future<Type>&& shared_state, TokenQueuePtr&& token)
 	{
 		return future<Type>{std::move(shared_state), std::move(token)};
 	}
 
 protected:
 	InternalFuture<T>   m_shared_state;
-	std::promise<Token> m_token;
+	TokenQueuePtr       m_token;
 };
 
 template <typename T>
@@ -444,18 +468,12 @@ public:
 	shared_future(shared_future&&) noexcept = default;
 	shared_future& operator=(shared_future&&) noexcept = default;
 	
-/*	static std::shared_future<T> Copy(const std::shared_future<T>& f) {return f;}
+	shared_future(const shared_future& rhs)
+	{
+		Base::m_shared_state = rhs.Base::m_shared_state;
+		Base::m_token        = rhs.Base::m_token;
+	}
 	
-	shared_future(const shared_future& future) : Base{Copy(future.Base::m_shared_state)}
-	{
-	}
-	shared_future& operator=(const shared_future& rhs)
-	{
-		shared_future other{rhs};
-		std::swap(*this, other);
-		return *this;
-	}
-*/
 	shared_future<T> share()
 	{
 		return *this;
@@ -513,11 +531,11 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 {
 	using T = decltype(func());
 	
-	std::promise<Token> cont;
+	auto cont = std::make_shared<TokenQueue>();
 	std::promise<void> arg;
 	arg.set_value();
 	
-	auto task   = std::make_shared<ConcreteTask<void, Func, std::future>>(arg.get_future(), std::forward<Func>(func), cont.get_future());
+	auto task   = std::make_shared<ConcreteTask<void, Func, std::future>>(arg.get_future(), std::forward<Func>(func), cont);
 	auto result = task->Result();
 	
 	exe->Execute(std::move(task));
@@ -529,7 +547,7 @@ template <typename T>
 class IntermediateResultOfWhenAll
 {
 public:
-	explicit IntermediateResultOfWhenAll(std::future<Token>&& token, std::size_t total) :
+	explicit IntermediateResultOfWhenAll(TokenQueuePtr token, std::size_t total) :
 		m_token{std::move(token)}, m_total{total}
 	{
 	}
@@ -549,12 +567,7 @@ public:
 				result.push_back(std::move(p.second));
 			m_promise.set_value(std::move(result));
 			
-			if (m_token.wait_for(std::chrono::seconds::zero()) == std::future_status::ready)
-			{
-				auto t = m_token.get();
-				if (t.host)
-					t.host->Schedule(t);
-			}
+			m_token->TryContinue();
 		}
 	}
 	
@@ -564,7 +577,7 @@ public:
 	}
 	
 private:
-	std::future<Token>              m_token;
+	TokenQueuePtr                   m_token;
 	std::promise<std::vector<T>>    m_promise;
 	std::map<std::size_t, T>        m_values;
 	std::size_t m_total{};
@@ -582,8 +595,8 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	for (auto it = first ; it != last; it++)
 		futures.push_back(it->share());
 	
-	std::promise<Token> token_promise;
-	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(token_promise.get_future(), futures.size());
+	auto token_promise = std::make_shared<TokenQueue>();
+	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(token_promise, futures.size());
 	future<std::vector<T>> future_vec{intermediate->Result(), std::move(token_promise)};
 	
 	for (auto i = futures.size()*0 ; i < futures.size(); i++)

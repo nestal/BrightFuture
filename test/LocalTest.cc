@@ -129,6 +129,7 @@ TEST_CASE( "Two executors", "[normal]" )
 
 TEST_CASE( "WhenAll 2 promises", "[normal]" )
 {
+	using namespace std::chrono_literals;
 	QueueExecutor exe;
 	auto thread = exe.Spawn();
 	
@@ -139,6 +140,9 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		std::vector<future<int>> futures;
 		futures.push_back(async([] { return 100; }, &exe));
 		futures.push_back(async([] { return 101; }, &exe));
+		
+//		std::this_thread::sleep_for(100ms);
+		
 		result = when_all(futures.begin(), futures.end(), &exe).then(
 			[](std::vector<int>&& ints)
 			{
@@ -164,11 +168,15 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 			}, &exe
 		);
 	}*/
+	
+//	std::cout << "waiting" << std::endl;
 	REQUIRE(result.get());
+//	std::cout << "wait OK" << std::endl;
 	
 	exe.Quit();
 	thread.join();
 }
+
 
 TEST_CASE("future<void>::then()", "[normal]")
 {
@@ -198,7 +206,6 @@ TEST_CASE("test share() shared_future", "[normal]")
 	bool run{false};
 	
 	auto future = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
-	
 	future.then([&run]{
 		run = true;
 	}, &exe).wait();
