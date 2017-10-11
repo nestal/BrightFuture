@@ -98,25 +98,33 @@ TEST_CASE( "Two executors", "[normal]" )
 	auto thread1 = exe1.Spawn();
 	auto thread2 = exe2.Spawn();
 	
+	auto run1 = false, run2 = false;
+	
 	// Call async() to run something on exe1. Since exe1 has only one thread,
 	// the ID of the thread running the task must be thread1.
-	auto future = async([tid=thread1.get_id()]
+	auto future = async([tid=thread1.get_id(), &run1]
 	{
 		REQUIRE(std::this_thread::get_id() == tid);
+		run1 = true;
 		return "string"s;
 	}, &exe1);
 	
 	// Similarly, run the continuation routine on exe2 and verify the thread ID.
-	future.then([tid=thread2.get_id()](std::string&& s)
+	future.then([tid=thread2.get_id(), &run2](std::string&& s)
 	{
+		
 		REQUIRE(s == "string"s);
 		REQUIRE(std::this_thread::get_id() == tid);
+		run2 = true;
 	}, &exe2).wait();
 	
 	exe1.Quit();
 	exe2.Quit();
 	thread1.join();
 	thread2.join();
+	
+	REQUIRE(run1);
+	REQUIRE(run2);
 }
 
 TEST_CASE( "WhenAll 2 promises", "[normal]" )
@@ -124,19 +132,23 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	QueueExecutor exe;
 	auto thread = exe.Spawn();
 	
+	auto run = false;
+	
 	std::vector<future<int>> futures;
 	futures.push_back(async([]{return 100;}, &exe));
 	futures.push_back(async([]{return 101;}, &exe));
-	when_all(futures.begin(), futures.end(), &exe).then([](std::vector<int>&& ints)
+	when_all(futures.begin(), futures.end(), &exe).then([&run](std::vector<int>&& ints)
 	{
 		REQUIRE(ints.size() == 2);
 		REQUIRE(ints.front() == 100);
 		REQUIRE(ints.back() == 101);
-		std::cout << "done" << std::endl;
+		run = true;
 	}, &exe).wait();
 	
 	exe.Quit();
 	thread.join();
+	
+	REQUIRE(run);
 }
 
 TEST_CASE("Throw in then()", "[error]")
