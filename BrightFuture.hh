@@ -444,7 +444,7 @@ public:
 	shared_future(shared_future&&) noexcept = default;
 	shared_future& operator=(shared_future&&) noexcept = default;
 	
-	static std::shared_future<T> Copy(const std::shared_future<T>& f) {return f;}
+/*	static std::shared_future<T> Copy(const std::shared_future<T>& f) {return f;}
 	
 	shared_future(const shared_future& future) : Base{Copy(future.Base::m_shared_state)}
 	{
@@ -455,7 +455,7 @@ public:
 		std::swap(*this, other);
 		return *this;
 	}
-	
+*/
 	shared_future<T> share()
 	{
 		return *this;
@@ -578,9 +578,9 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	
 	// move all futures to a vector first, because we need to know how many
 	// and InputIt only allows us to iterate them once.
-	std::vector<future<T>> futures;
+	std::vector<shared_future<T>> futures;
 	for (auto it = first ; it != last; it++)
-		futures.push_back(std::move(*it));
+		futures.push_back(it->share());
 	
 	std::promise<Token> token_promise;
 	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(token_promise.get_future(), futures.size());
