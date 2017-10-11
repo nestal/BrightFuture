@@ -153,7 +153,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 			}, &exe
 		);
 	}
-/*	SECTION("2 shared_future<int>'s")
+	SECTION("2 shared_future<int>'s")
 	{
 		std::vector<shared_future<int>> futures;
 		futures.push_back(async([] { return 100; }, &exe).share());
@@ -167,7 +167,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 				return true;
 			}, &exe
 		);
-	}*/
+	}
 	
 //	std::cout << "waiting" << std::endl;
 	REQUIRE(result.get());
@@ -197,7 +197,7 @@ TEST_CASE("future<void>::then()", "[normal]")
 	REQUIRE(run);
 }
 
-TEST_CASE("test share() shared_future", "[normal]")
+TEST_CASE("test shared_future::then()", "[normal]")
 {
 	using namespace std::chrono_literals;
 	QueueExecutor exe;
@@ -206,7 +206,9 @@ TEST_CASE("test share() shared_future", "[normal]")
 	bool run{false};
 	
 	auto future = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
-	future.then([&run]{
+	auto copy = future;
+	
+	copy.then([&run]{
 		run = true;
 	}, &exe).wait();
 	

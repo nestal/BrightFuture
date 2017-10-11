@@ -63,7 +63,10 @@ public:
 	{
 		std::unique_lock<std::mutex> lock{m_mux};
 		if (m_popped)
+		{
+			assert(m_queue.empty());
 			return false;
+		}
 		
 		m_queue.push_back(tok);
 		return true;
@@ -390,7 +393,6 @@ public:
 		// Prepare the continuation routine as a task. The function of the task is of course
 		// the continuation routine itself. The argument of the continuation routine is the
 		// result of the last async call, i.e. the variable referred by the m_shared_state future.
-		bool is_ready = (m_shared_state.wait_for(std::chrono::seconds::zero()) == std::future_status::ready);
 		auto continuation_task = MakeTask(std::move(m_shared_state), std::forward<Func>(continuation), next_token);
 		
 		// We also need to know the promise to return value of the continuation routine as well.
@@ -408,10 +410,8 @@ public:
 		// "arg" is the argument of the continuation function, i.e. the result of the previous async
 		// call. If it is ready, that means the previous async call is finished. We can directly
 		// invoke the continuation function here.
-		if (is_ready)
+		if (!m_token->PushBack(continuation_token))
 			host->Schedule(continuation_token);
-		else
-			m_token->PushBack(continuation_token);
 		
 		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
 	}
@@ -565,8 +565,10 @@ public:
 			std::vector<T> result;
 			for (auto&& p : m_values)
 				result.push_back(std::move(p.second));
+			lock.unlock();
+
+			// m_promise and m_token are both thread-safe, no need to protect them
 			m_promise.set_value(std::move(result));
-			
 			m_token->TryContinue();
 		}
 	}
@@ -579,9 +581,10 @@ public:
 private:
 	TokenQueuePtr                   m_token;
 	std::promise<std::vector<T>>    m_promise;
+	
+	std::mutex  m_mux;
 	std::map<std::size_t, T>        m_values;
 	std::size_t m_total{};
-	std::mutex  m_mux;
 };
 
 template < class InputIt >
