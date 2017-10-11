@@ -327,8 +327,8 @@ public:
 	
 public:
 	BrightFuture() = default;
-	BrightFuture(BrightFuture&&) = default;
-	BrightFuture& operator=(BrightFuture&&) = default;
+	BrightFuture(BrightFuture&&) noexcept = default;
+	BrightFuture& operator=(BrightFuture&&) noexcept = default;
 	
 	explicit BrightFuture(InternalFuture<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
 		m_shared_state{std::move(shared_state)},
@@ -441,8 +441,8 @@ public:
 	using Base = BrightFuture<T, std::shared_future, shared_future<T>>;
 	using Base::BrightFuture;
 	
-	shared_future(shared_future&&) = default;
-	shared_future& operator=(shared_future&&) = default;
+	shared_future(shared_future&&) noexcept = default;
+	shared_future& operator=(shared_future&&) noexcept = default;
 	
 	static std::shared_future<T> Copy(const std::shared_future<T>& f) {return f;}
 	
@@ -483,8 +483,8 @@ public:
 	using Base = BrightFuture<T, std::future, future<T>>;
 	using Base::BrightFuture;
 	
-	future(future&&) = default;
-	future& operator=(future&&) = default;
+	future(future&&) noexcept = default;
+	future& operator=(future&&) noexcept = default;
 	future(const future& future) = delete;
 	future& operator=(const future&) = delete;
 	
@@ -578,9 +578,9 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	
 	// move all futures to a vector first, because we need to know how many
 	// and InputIt only allows us to iterate them once.
-	std::vector<shared_future<T>> futures;
+	std::vector<future<T>> futures;
 	for (auto it = first ; it != last; it++)
-		futures.push_back(it->share());
+		futures.push_back(std::move(*it));
 	
 	std::promise<Token> token_promise;
 	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(token_promise.get_future(), futures.size());
