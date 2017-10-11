@@ -151,7 +151,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	REQUIRE(run);
 }
 
-TEST_CASE("Throw in then()", "[error]")
+TEST_CASE("void then(void)", "[normal]")
 {
 	using namespace std::chrono_literals;
 	QueueExecutor exe;
@@ -168,4 +168,27 @@ TEST_CASE("Throw in then()", "[error]")
 	thread.join();
 	
 	REQUIRE(run);
+}
+
+TEST_CASE("test share() shared_future", "[normal]")
+{
+	using namespace std::chrono_literals;
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
+	
+	bool run{false};
+	
+	std::cout << "before" << std::endl;
+	auto future = async([]{std::this_thread::sleep_for(100ms); std::cout << "after wait" << std::endl;}, &exe).share();
+	std::cout << "done! here" << std::endl;
+	
+/*	future.then([&run]{
+		run = true;
+	}, &exe).wait();*/
+//	future.wait();
+	
+	exe.Quit();
+	thread.join();
+	
+	std::cout << "quitted" << std::endl;
 }

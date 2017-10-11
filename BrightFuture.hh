@@ -153,14 +153,14 @@ protected:
 										//!< return value, after it is ready.
 };
 
-template <typename Arg, typename Function>
+template <typename Arg, typename Function, template <typename> class InternalFuture>
 class ConcreteTask : public Continuation<Arg, Function>
 {
 private:
 	using Base = Continuation<Arg, Function>;
 	
 public:
-	ConcreteTask(std::future<Arg>&& arg, Function&& func, std::future<Token>&& cont) :
+	ConcreteTask(InternalFuture<Arg>&& arg, Function&& func, std::future<Token>&& cont) :
 		Base{std::move(func), std::move(cont)}, m_arg{std::move(arg)}
 	{
 	}
@@ -186,17 +186,17 @@ private:
 	}
 
 private:
-	std::future<Arg> m_arg;      //!< Argument to the function to be called in Execute().
+	InternalFuture<Arg> m_arg;      //!< Argument to the function to be called in Execute().
 };
 
-template <typename Function>
-class ConcreteTask<void, Function> : public Continuation<void, Function>
+template <typename Function, template <typename> class InternalFuture>
+class ConcreteTask<void, Function, InternalFuture> : public Continuation<void, Function>
 {
 private:
 	using Base = Continuation<void, Function>;
 
 public:
-	ConcreteTask(std::future<void>&& arg, Function&& func, std::future<Token>&& cont) :
+	ConcreteTask(InternalFuture<void>&& arg, Function&& func, std::future<Token>&& cont) :
 		Base{std::move(func), std::move(cont)}, m_arg{std::move(arg)}
 	{
 	}
@@ -224,13 +224,13 @@ private:
 	}
 	
 private:
-	std::future<void> m_arg;
+	InternalFuture<void> m_arg;
 };
 
-template <typename T, typename Function>
-auto MakeTask(std::future<T>&& arg, Function&& func, std::future<Token>&& cont)
+template <typename T, typename Function, template <typename> class InternalFuture>
+auto MakeTask(InternalFuture<T>&& arg, Function&& func, std::future<Token>&& cont)
 {
-	return std::make_shared<ConcreteTask<T, Function>>(std::move(arg), std::forward<Function>(func), std::move(cont));
+	return std::make_shared<ConcreteTask<T, Function, InternalFuture>>(std::move(arg), std::forward<Function>(func), std::move(cont));
 }
 
 class DefaultExecutor : public ExecutorBase<DefaultExecutor>
@@ -316,7 +316,13 @@ private:
 	std::atomic<decltype(m_queue.size())> m_count{0};
 };
 
+template <typename T, template <typename> class InternalFuture=std::future>
+class future;
+
 template <typename T>
+using shared_future = future<T, std::shared_future>;
+
+template <typename T, template <typename> class InternalFuture>
 class future
 {
 public:
@@ -331,7 +337,7 @@ public:
 	future& operator=(future&&) noexcept= default;
 	future& operator=(const future&) = delete;
 	
-	explicit future(std::future<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
+	explicit future(InternalFuture<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
 		m_shared_state{std::move(shared_state)},
 		m_token{std::move(token)}
 	{
@@ -347,8 +353,13 @@ public:
 		// that happen.
 		// So we need to check if Then() is called, and set the m_token promise to a
 		// null token to tell the executor that no continuation routine is needed.
+		std::cout << "dtor" << std::endl;
 		if (m_shared_state.valid())
+		{
+			std::cout << "dtor set" << std::endl;
 			m_token.set_value({});
+		}
+		std::cout << "end dtor" << std::endl;
 	}
 	
 	template <typename Func>
@@ -393,10 +404,10 @@ public:
 		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
 	}
 	
-	std::shared_future<T> share()
+	shared_future<T> share()
 	{
 		assert(valid());
-		return m_shared_state.share();
+		return shared_future<T>{m_shared_state.share(), std::move(m_token)};
 	}
 	
 	template <typename R=T>
@@ -451,7 +462,7 @@ public:
 	}
 
 private:
-	std::future<T>      m_shared_state;
+	InternalFuture<T>   m_shared_state;
 	std::promise<Token> m_token;
 };
 
@@ -462,11 +473,11 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	
 	std::promise<Token> cont;
 	std::promise<void> arg;
+	arg.set_value();
 	
-	auto task   = std::make_shared<ConcreteTask<void, Func>>(arg.get_future(), std::forward<Func>(func), cont.get_future());
+	auto task   = std::make_shared<ConcreteTask<void, Func, std::future>>(arg.get_future(), std::forward<Func>(func), cont.get_future());
 	auto result = task->Result();
 	
-	arg.set_value();
 	exe->Execute(std::move(task));
 	
 	return future<T>::MakeFuture(std::move(result), std::move(cont));
