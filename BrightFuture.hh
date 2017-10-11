@@ -316,34 +316,27 @@ private:
 	std::atomic<decltype(m_queue.size())> m_count{0};
 };
 
-template <typename T, template <typename> class InternalFuture=std::future>
+template <typename T>
 class future;
 
-template <typename T>
-using shared_future = future<T, std::shared_future>;
-
-template <typename T, template <typename> class InternalFuture>
-class future
+template <typename T, template <typename> class InternalFuture, typename Inherited>
+class BrightFuture
 {
 public:
 	using value_type = T;
 	
 public:
-	future() = default;
+	BrightFuture() = default;
+	BrightFuture(BrightFuture&&) = default;
+	BrightFuture& operator=(BrightFuture&&) = default;
 	
-	// move only type
-	future(future&&) noexcept = default;
-	future(const future&) = delete;
-	future& operator=(future&&) noexcept= default;
-	future& operator=(const future&) = delete;
-	
-	explicit future(InternalFuture<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
+	explicit BrightFuture(InternalFuture<T>&& shared_state, std::promise<Token>&& token = {}) noexcept :
 		m_shared_state{std::move(shared_state)},
 		m_token{std::move(token)}
 	{
 	}
 	
-	~future()
+	~BrightFuture()
 	{
 		// This is a bit tricky. If the future is destroyed without called Then(), then
 		// no one will set the m_token promise. When the executor finishes running the
@@ -398,27 +391,7 @@ public:
 		
 		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
 	}
-	
-	shared_future<T> share()
-	{
-		assert(valid());
-		return shared_future<T>{m_shared_state.share(), std::move(m_token)};
-	}
-	
-	template <typename R=T>
-	typename std::enable_if<std::is_void<R>::value>::type get()
-	{
-		assert(valid());
-		m_shared_state.get();
-	}
-	
-	template <typename R=T>
-	typename std::enable_if<!std::is_void<R>::value, T>::type& get()
-	{
-		assert(valid());
-		return m_shared_state.get();
-	}
-	
+
 	void wait()
 	{
 		assert(valid());
@@ -449,16 +422,90 @@ public:
 		assert(valid());
 		return m_shared_state.wait_until(time_point);
 	}
-	
+
 	template <typename Type>
 	static auto MakeFuture(std::future<Type>&& shared_state, std::promise<Token>&& token)
 	{
 		return future<Type>{std::move(shared_state), std::move(token)};
 	}
 
-private:
+protected:
 	InternalFuture<T>   m_shared_state;
 	std::promise<Token> m_token;
+};
+
+template <typename T>
+class shared_future : public BrightFuture<T, std::shared_future, shared_future<T>>
+{
+public:
+	using Base = BrightFuture<T, std::shared_future, shared_future<T>>;
+	using Base::BrightFuture;
+	
+	shared_future(shared_future&&) = default;
+	shared_future& operator=(shared_future&&) = default;
+	
+	static std::shared_future<T> Copy(const std::shared_future<T>& f) {return f;}
+	
+	shared_future(const shared_future& future) : Base{Copy(future.Base::m_shared_state)}
+	{
+	}
+	shared_future& operator=(const shared_future& rhs)
+	{
+		shared_future other{rhs};
+		std::swap(*this, other);
+		return *this;
+	}
+	
+	shared_future<T> share()
+	{
+		return *this;
+	}
+
+	template <typename R=T>
+	typename std::enable_if<std::is_void<R>::value>::type get()
+	{
+		assert(Base::valid());
+		Base::m_shared_state.get();
+	}
+	
+	template <typename R=T>
+	typename std::enable_if<!std::is_void<R>::value, const T>::type& get()
+	{
+		assert(Base::valid());
+		return Base::m_shared_state.get();
+	}
+};
+
+template <typename T>
+class future : public BrightFuture<T, std::future, future<T>>
+{
+public:
+	using Base = BrightFuture<T, std::future, future<T>>;
+	using Base::BrightFuture;
+	
+	future(future&&) = default;
+	future& operator=(future&&) = default;
+	future(const future& future) = delete;
+	future& operator=(const future&) = delete;
+	
+	shared_future<T> share()
+	{
+		return shared_future<T>{Base::m_shared_state.share(), std::move(Base::m_token)};
+	}
+
+	template <typename R=T>
+	typename std::enable_if<std::is_void<R>::value>::type get()
+	{
+		assert(Base::valid());
+		Base::m_shared_state.get();
+	}
+	
+	template <typename R=T>
+	typename std::enable_if<!std::is_void<R>::value, T>::type get()
+	{
+		assert(Base::valid());
+		return Base::m_shared_state.get();
+	}
 };
 
 template <typename Func>

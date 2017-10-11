@@ -132,26 +132,45 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	QueueExecutor exe;
 	auto thread = exe.Spawn();
 	
-	auto run = false;
+	future<bool> result;
 	
-	std::vector<future<int>> futures;
-	futures.push_back(async([]{return 100;}, &exe));
-	futures.push_back(async([]{return 101;}, &exe));
-	when_all(futures.begin(), futures.end(), &exe).then([&run](std::vector<int>&& ints)
+	SECTION("2 future<int>'s")
 	{
-		REQUIRE(ints.size() == 2);
-		REQUIRE(ints.front() == 100);
-		REQUIRE(ints.back() == 101);
-		run = true;
-	}, &exe).wait();
+		std::vector<future<int>> futures;
+		futures.push_back(async([] { return 100; }, &exe));
+		futures.push_back(async([] { return 101; }, &exe));
+		result = when_all(futures.begin(), futures.end(), &exe).then(
+			[](std::vector<int>&& ints)
+			{
+				REQUIRE(ints.size() == 2);
+				REQUIRE(ints.front() == 100);
+				REQUIRE(ints.back() == 101);
+				return true;
+			}, &exe
+		);
+	}
+/*	SECTION("2 shared_future<int>'s")
+	{
+		std::vector<shared_future<int>> futures;
+		futures.push_back(async([] { return 100; }, &exe).share());
+		futures.push_back(async([] { return 101; }, &exe).share());
+		result = when_all(futures.begin(), futures.end(), &exe).then(
+			[](std::vector<int>&& ints)
+			{
+				REQUIRE(ints.size() == 2);
+				REQUIRE(ints.front() == 100);
+				REQUIRE(ints.back() == 101);
+				return true;
+			}, &exe
+		);
+	}*/
+	REQUIRE(result.get());
 	
 	exe.Quit();
 	thread.join();
-	
-	REQUIRE(run);
 }
 
-TEST_CASE("void then(void)", "[normal]")
+TEST_CASE("future<void>::then()", "[normal]")
 {
 	using namespace std::chrono_literals;
 	QueueExecutor exe;
