@@ -353,13 +353,8 @@ public:
 		// that happen.
 		// So we need to check if Then() is called, and set the m_token promise to a
 		// null token to tell the executor that no continuation routine is needed.
-		std::cout << "dtor" << std::endl;
 		if (m_shared_state.valid())
-		{
-			std::cout << "dtor set" << std::endl;
 			m_token.set_value({});
-		}
-		std::cout << "end dtor" << std::endl;
 	}
 	
 	template <typename Func>
