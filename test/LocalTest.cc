@@ -138,3 +138,22 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	exe.Quit();
 	thread.join();
 }
+
+TEST_CASE("Throw in then()", "[error]")
+{
+	using namespace std::chrono_literals;
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
+	
+	bool run{false};
+	
+	auto future = async([]{std::this_thread::sleep_for(100ms);}, &exe);
+	future.then([&run]{
+		run = true;
+	}, &exe).wait();
+	
+	exe.Quit();
+	thread.join();
+	
+	REQUIRE(run);
+}

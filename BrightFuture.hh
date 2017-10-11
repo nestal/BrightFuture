@@ -161,7 +161,7 @@ private:
 	
 public:
 	ConcreteTask(std::future<Arg>&& arg, Function&& func, std::future<Token>&& cont) :
-		m_arg{std::move(arg)}, Base{std::move(func), std::move(cont)}
+		Base{std::move(func), std::move(cont)}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -196,8 +196,8 @@ private:
 	using Base = Continuation<void, Function>;
 
 public:
-	ConcreteTask(Function&& func, std::future<Token>&& cont) :
-		Base{std::move(func), std::move(cont)}
+	ConcreteTask(std::future<void>&& arg, Function&& func, std::future<Token>&& cont) :
+		Base{std::move(func), std::move(cont)}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -211,15 +211,20 @@ private:
 	template <typename R=typename Base::Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Run()
 	{
+		m_arg.get();
 		Base::m_return.set_value(Base::m_function());
 	}
 
 	template <typename R=typename Base::Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Run()
 	{
+		m_arg.get();
 		Base::m_function();
 		Base::m_return.set_value();
 	}
+	
+private:
+	std::future<void> m_arg;
 };
 
 template <typename T, typename Function>
@@ -456,10 +461,12 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	using T = decltype(func());
 	
 	std::promise<Token> cont;
+	std::promise<void> arg;
 	
-	auto task   = std::make_shared<ConcreteTask<void, Func>>(std::forward<Func>(func), cont.get_future());
+	auto task   = std::make_shared<ConcreteTask<void, Func>>(arg.get_future(), std::forward<Func>(func), cont.get_future());
 	auto result = task->Result();
 	
+	arg.set_value();
 	exe->Execute(std::move(task));
 	
 	return future<T>::MakeFuture(std::move(result), std::move(cont));
