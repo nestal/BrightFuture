@@ -69,8 +69,8 @@ public:
 	{
 		for (auto&& t : Pop())
 		{
-			if (t.host)
-				t.host->Schedule(t);
+			assert(t.host);
+			t.host->Schedule(t);
 		}
 	}
 	
@@ -274,7 +274,6 @@ public:
 
 private:
 	std::promise<T>     m_shared_state;
-	//! Token of the continuation routine that consumes the return value, after it is ready.
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
@@ -374,34 +373,28 @@ public:
 		return m_return.get_future();
 	}
 
-	void Execute()
-	{
-		Run();
-	}
-
-private:
 	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<!std::is_void<R>::value && !std::is_void<A>::value>::type Run()
+	typename std::enable_if<!std::is_void<R>::value && !std::is_void<A>::value>::type Execute()
 	{
 		m_return.set_value(m_function(m_arg.get()));
 	}
 
 	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<std::is_void<R>::value && !std::is_void<A>::value>::type Run()
+	typename std::enable_if<std::is_void<R>::value && !std::is_void<A>::value>::type Execute()
 	{
 		m_function(m_arg.get());
 		m_return.set_value();
 	}
 
 	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<!std::is_void<R>::value && std::is_void<A>::value>::type Run()
+	typename std::enable_if<!std::is_void<R>::value && std::is_void<A>::value>::type Execute()
 	{
 		m_arg.get();
 		m_return.set_value(m_function());
 	}
 
 	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<std::is_void<R>::value && std::is_void<A>::value>::type Run()
+	typename std::enable_if<std::is_void<R>::value && std::is_void<A>::value>::type Execute()
 	{
 		m_arg.get();
 		m_function();
@@ -502,30 +495,27 @@ private:
 };
 
 template <typename Func, typename InternalFuture>
-auto Async(Func&& continuation, InternalFuture&& future, TokenQueue *token, Executor *host)
+auto Async(Func&& continuation, InternalFuture&& ifuture, TokenQueue *token_queue, Executor *host)
 {
-	assert(future.valid());
+	assert(ifuture.valid());
 
-	auto continuation_task      = MakeTask(std::forward<InternalFuture>(future), std::forward<Func>(continuation));
-	auto continuation_future    = continuation_task->GetFuture();
-	auto continuation_token     = host->Add([task=std::move(continuation_task)]{task->Execute();});
-
-	assert(continuation_token.host);
-	assert(continuation_token.host == host);
+	auto task      = MakeTask(std::forward<InternalFuture>(ifuture), std::forward<Func>(continuation));
+	auto future    = task->GetFuture();
+	auto token     = host->Add([task=std::move(task)]{task->Execute();});
 
 	// There is a race condition here: whether or not the last async call has finished or not.
 
 	// If it has finished, it should have already Scheduled() all continuation tokens in the
 	// m_token queue. In this case, PushBack() will return false, indicating no one will ever
-	// look at the queue again. We need to schedule our continuation_token here.
+	// look at the queue again. We need to schedule our cont_token here.
 
 	// Otherwise, PushBack() will returns true, that means the last async call has not finished
-	// and the continuation_token is added to the queue. In this case the token will be Scheduled()
+	// and the cont_token is added to the queue. In this case the token will be Scheduled()
 	// by the async call when it finishes. We don't need to call Schedule() ourselves.
-	if (!token || !token->PushBack(continuation_token))
-		host->Schedule(continuation_token);
+	if (!token_queue || !token_queue->PushBack(token))
+		host->Schedule(token);
 
-	return continuation_future;
+	return future;
 }
 
 template <typename Func>
