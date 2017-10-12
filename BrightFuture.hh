@@ -27,19 +27,12 @@ struct Token;
 class TaskBase;
 class Executor;
 
-class TaskBase
-{
-public:
-	virtual ~TaskBase() = default;
-	virtual void Execute() = 0;
-};
-
 class Executor
 {
 public:
 	virtual ~Executor() = default;
-	virtual void Execute(std::shared_ptr<TaskBase>&& task) = 0;
-	virtual Token Add(std::shared_ptr<TaskBase>&& task) = 0;
+	virtual void Execute(const std::function<void()>& task) = 0;
+	virtual Token Add(const std::function<void()>& task) = 0;
 	virtual void Schedule(Token token) = 0;
 };
 /**
@@ -299,17 +292,17 @@ class ExecutorBase : public Executor
 public:
 	ExecutorBase() = default;
 
-	Token Add(std::shared_ptr<TaskBase>&& task) override
+	Token Add(const std::function<void()>& task) override
 	{
 		std::unique_lock<std::mutex> lock{m_task_mutex};
 		auto event = m_seq++;
-		m_tasks.emplace(event, std::move(task));
+		m_tasks.emplace(event, task);
 		return {this, event};
 	}
 
 	void Schedule(Token token) override
 	{
-		std::shared_ptr<TaskBase> task;
+		std::function<void()> task;
 		{
 			std::unique_lock<std::mutex> lock{m_task_mutex};
 			auto it = m_tasks.find(token.event);
@@ -322,18 +315,18 @@ public:
 		
 		// m_task_mutex does not protect m_executor, which is thread-safe.
 		if (task)
-			Execute(std::move(task));
+			Execute(task);
 	}
 
-	void Execute(std::shared_ptr<TaskBase>&& task) override
+	void Execute(const std::function<void()>& task) override
 	{
 		// Use CRTP to call ConcreteExecutor::Execute().
-		static_cast<ConcreteExecutor*>(this)->Execute([task=std::move(task)]{ task->Execute(); });
+		static_cast<ConcreteExecutor*>(this)->ExecuteTask(task);
 	}
 
 private:
 	std::mutex  m_task_mutex;
-	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
+	std::unordered_map<std::intptr_t, std::function<void()>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
 
@@ -373,26 +366,27 @@ private:
 };
 
 template <typename Arg, typename Callable, typename StdFutureArg>
-class Continuation : public TaskBase
+class Continuation
 {
 public:
 	// Return value of "Function". It may be void.
 	using Ret = typename ReturnType<Arg, Callable>::Type;
-	
+
+public:
+	Continuation(StdFutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
+	{
+	}
+
 	auto GetFuture()
 	{
 		return m_return.get_future();
 	}
 
-
-	Continuation(StdFutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
-	{
-	}
-
-	void Execute() override
+	void Execute()
 	{
 		Run();
 	}
+
 private:
 	template <typename R=Ret, typename A=Arg>
 	typename std::enable_if<!std::is_void<R>::value && !std::is_void<A>::value>::type Run()
@@ -438,10 +432,9 @@ class DefaultExecutor : public ExecutorBase<DefaultExecutor>
 {
 public:
 	// Called by ExecutorBase using CRTP
-	template <typename Func>
-	void Execute(Func&& func)
+	void ExecuteTask(const std::function<void()>& task)
 	{
-		std::thread{std::forward<Func>(func)}.detach();
+		std::thread{task}.detach();
 	}
 	
 	static DefaultExecutor* Instance()
@@ -501,11 +494,10 @@ public:
 	}
 	
 	// Called by ExecutorBase using CRTP
-	template <typename Func>
-	void Execute(Func&& func)
+	void ExecuteTask(const std::function<void()>& task)
 	{
 		std::unique_lock<std::mutex> lock{m_mux};
-		m_queue.push_back(std::forward<Func>(func));
+		m_queue.push_back(task);
 		m_cond.notify_one();
 	}
 	
@@ -538,7 +530,7 @@ auto BrightFuture<T, Inherited>::Then(Func&& continuation, InternalFuture&& futu
 	// Add the continuation routine to the executor, which will run the task and set its return
 	// value to the promise above. A token to the task is returned. We use this token to schedule
 	// the continuation routine.
-	auto continuation_token = host->Add(std::move(continuation_task));
+	auto continuation_token = host->Add([task=std::move(continuation_task)]{task->Execute();});
 
 	assert(continuation_token.host);
 	assert(continuation_token.host == host);
@@ -570,7 +562,7 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	auto task   = MakeTask(arg.get_future(), std::forward<Func>(func));
 	auto result = task->GetFuture();
 
-	exe->Execute(std::move(task));
+	exe->Execute([task=std::move(task)]{task->Execute();});
 	
 	return result;
 }
