@@ -372,7 +372,7 @@ private:
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
-template <typename Arg, typename Callable>
+template <typename Arg, typename Callable, typename StdFutureArg>
 class Continuation : public TaskBase
 {
 public:
@@ -384,23 +384,8 @@ public:
 		return m_return.get_future();
 	}
 
-protected:
-	Continuation(Callable&& func) : m_function{std::move(func)}
-	{
-	}
-	
-	promise<Ret>   m_return;       //!< Promise to the return value of the function to be called.
-	Callable       m_function;     //!< Function to be called in Execute().
-};
 
-template <typename Arg, typename Function, typename InternalFuture>
-class ConcreteTask : public Continuation<Arg, Function>
-{
-private:
-	using Base = Continuation<Arg, Function>;
-	
-public:
-	ConcreteTask(InternalFuture&& arg, Function&& func) : Base{std::move(func)}, m_arg{std::move(arg)}
+	Continuation(StdFutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -408,66 +393,45 @@ public:
 	{
 		Run();
 	}
-	
 private:
-	template <typename R=typename Base::Ret>
-	typename std::enable_if<!std::is_void<R>::value>::type Run()
+	template <typename R=Ret, typename A=Arg>
+	typename std::enable_if<!std::is_void<R>::value && !std::is_void<A>::value>::type Run()
 	{
-		Base::m_return.set_value(Base::m_function(m_arg.get()));
+		m_return.set_value(m_function(m_arg.get()));
 	}
 
-	template <typename R=typename Base::Ret>
-	typename std::enable_if<std::is_void<R>::value>::type Run()
+	template <typename R=Ret, typename A=Arg>
+	typename std::enable_if<std::is_void<R>::value && !std::is_void<A>::value>::type Run()
 	{
-		Base::m_function(m_arg.get());
-		Base::m_return.set_value();
+		m_function(m_arg.get());
+		m_return.set_value();
 	}
 
-private:
-	InternalFuture m_arg;      //!< Argument to the function to be called in Execute().
-};
-
-template <typename Function, typename InternalFuture>
-class ConcreteTask<void, Function, InternalFuture> : public Continuation<void, Function>
-{
-private:
-	using Base = Continuation<void, Function>;
-
-public:
-	ConcreteTask(InternalFuture&& arg, Function&& func) :
-		Base{std::move(func)}, m_arg{std::move(arg)}
-	{
-	}
-
-	void Execute() override
-	{
-		Run();
-	}
-	
-private:
-	template <typename R=typename Base::Ret>
-	typename std::enable_if<!std::is_void<R>::value>::type Run()
+	template <typename R=Ret, typename A=Arg>
+	typename std::enable_if<!std::is_void<R>::value && std::is_void<A>::value>::type Run()
 	{
 		m_arg.get();
-		Base::m_return.set_value(Base::m_function());
+		m_return.set_value(m_function());
 	}
 
-	template <typename R=typename Base::Ret>
-	typename std::enable_if<std::is_void<R>::value>::type Run()
+	template <typename R=Ret, typename A=Arg>
+	typename std::enable_if<std::is_void<R>::value && std::is_void<A>::value>::type Run()
 	{
 		m_arg.get();
-		Base::m_function();
-		Base::m_return.set_value();
+		m_function();
+		m_return.set_value();
 	}
-	
+
 private:
-	InternalFuture m_arg;
+	StdFutureArg    m_arg;          //!< Argument to the function to be called in Execute().
+	promise<Ret>    m_return;       //!< Promise to the return value of the function to be called.
+	Callable        m_function;     //!< Function to be called in Execute().
 };
 
 template <typename T, typename Function, template <typename> class InternalFuture>
 auto MakeTask(InternalFuture<T>&& arg, Function&& func)
 {
-	return std::make_shared<ConcreteTask<T, Function, InternalFuture<T>>>(std::move(arg), std::forward<Function>(func));
+	return std::make_shared<Continuation<T, Function, InternalFuture<T>>>(std::move(arg), std::forward<Function>(func));
 }
 
 class DefaultExecutor : public ExecutorBase<DefaultExecutor>
