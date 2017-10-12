@@ -385,49 +385,6 @@ private:
 	friend Inherited;
 
 public:
-	template <typename Func>
-	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
-	{
-		assert(valid());
-		
-		// Prepare the continuation routine as a task. The function of the task is of course
-		// the continuation routine itself. The argument of the continuation routine is the
-		// result of the last async call, i.e. the variable referred by the m_shared_state future.
-
-		// The "InternalFuture()" returned by the inherited class may be a const std::shared_future&
-		// or a std::future&&. MakeTask() will perfectly forward both.
-		auto continuation_task = MakeTask(
-			static_cast<Inherited&>(*this).InternalFuture(),
-			std::forward<Func>(continuation)
-		);
-
-		// The future to the return of the continuation routine to support chaining. It's the return
-		// value of this function.
-		auto continuation_future = MakeFuture(continuation_task);
-
-		// Add the continuation routine to the executor, which will run the task and set its return
-		// value to the promise above. A token to the task is returned. We use this token to schedule
-		// the continuation routine.
-		auto continuation_token = host->Add(std::move(continuation_task));
-		
-		assert(continuation_token.host);
-		assert(continuation_token.host == host);
-
-		// There is a race condition here: whether or not the last async call has finished or not.
-		
-		// If it has finished, it should have already Scheduled() all continuation tokens in the
-		// m_token queue. In this case, PushBack() will return false, indicating no one will ever
-		// look at the queue again. We need to schedule our continuation_token here.
-		
-		// Otherwise, PushBack() will returns true, that means the last async call has not finished
-		// and the continuation_token is added to the queue. In this case the token will be Scheduled()
-		// by the async call when it finishes. We don't need to call Schedule() ourselves.
-		if (!m_token->PushBack(continuation_token))
-			host->Schedule(continuation_token);
-		
-		return continuation_future;
-	}
-
 	void wait()
 	{
 		assert(valid());
@@ -486,6 +443,12 @@ public:
 		return *this;
 	}
 
+	template <typename Func>
+	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
+	{
+		return Then(std::forward<Func>(continuation), std::shared_future<T>{m_shared_state}, *m_token, host);
+	}
+
 	template <typename R=T>
 	typename std::enable_if<std::is_void<R>::value>::type get()
 	{
@@ -534,6 +497,12 @@ public:
 		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token)};
 	}
 
+	template <typename Func>
+	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
+	{
+		return Then(std::forward<Func>(continuation), std::move(m_shared_state), *m_token, host);
+	}
+
 	template <typename R=T>
 	typename std::enable_if<std::is_void<R>::value>::type get()
 	{
@@ -565,6 +534,46 @@ template <typename Task>
 auto MakeFuture(const std::shared_ptr<Task>& task)
 {
 	return future<typename Task::Ret>{task->Result(), task->Token()};
+}
+
+template <typename Func, typename InternalFuture>
+auto Then(Func&& continuation, InternalFuture&& future, TokenQueue& token, Executor *host = DefaultExecutor::Instance())
+{
+	assert(future.valid());
+
+	// Prepare the continuation routine as a task. The function of the task is of course
+	// the continuation routine itself. The argument of the continuation routine is the
+	// result of the last async call, i.e. the variable referred by the m_shared_state future.
+
+	// The "InternalFuture()" returned by the inherited class may be a const std::shared_future&
+	// or a std::future&&. MakeTask() will perfectly forward both.
+	auto continuation_task = MakeTask(std::forward<InternalFuture>(future), std::forward<Func>(continuation));
+
+	// The future to the return of the continuation routine to support chaining. It's the return
+	// value of this function.
+	auto continuation_future = MakeFuture(continuation_task);
+
+	// Add the continuation routine to the executor, which will run the task and set its return
+	// value to the promise above. A token to the task is returned. We use this token to schedule
+	// the continuation routine.
+	auto continuation_token = host->Add(std::move(continuation_task));
+
+	assert(continuation_token.host);
+	assert(continuation_token.host == host);
+
+	// There is a race condition here: whether or not the last async call has finished or not.
+
+	// If it has finished, it should have already Scheduled() all continuation tokens in the
+	// m_token queue. In this case, PushBack() will return false, indicating no one will ever
+	// look at the queue again. We need to schedule our continuation_token here.
+
+	// Otherwise, PushBack() will returns true, that means the last async call has not finished
+	// and the continuation_token is added to the queue. In this case the token will be Scheduled()
+	// by the async call when it finishes. We don't need to call Schedule() ourselves.
+	if (!token.PushBack(continuation_token))
+		host->Schedule(continuation_token);
+
+	return continuation_future;
 }
 
 template <typename Func>
