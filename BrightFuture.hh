@@ -163,14 +163,18 @@ public:
 	// Return value of "Function". It may be void.
 	using Ret = typename ReturnType<Arg, Callable>::Type;
 	
-	auto Result()
+	std::future<Ret> Result()
 	{
 		return m_return.get_future();
 	}
 
+	TokenQueuePtr Token()
+	{
+		return m_cont;
+	}
+
 protected:
-	Continuation(Callable&& func, TokenQueuePtr cont) :
-		m_function{std::move(func)}, m_cont{std::move(cont)}
+	Continuation(Callable&& func) : m_function{std::move(func)}
 	{
 	}
 	
@@ -189,8 +193,9 @@ protected:
 
 	std::promise<Ret>   m_return;       //!< Promise to the return value of the function to be called.
 	Callable            m_function;     //!< Function to be called in Execute().
-	TokenQueuePtr       m_cont;     //!< Token of the continuation routine that consumes the
-											//!< return value, after it is ready.
+
+	//! Token of the continuation routine that consumes the return value, after it is ready.
+	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
 template <typename Arg, typename Function, template <typename> class InternalFuture>
@@ -200,8 +205,7 @@ private:
 	using Base = Continuation<Arg, Function>;
 	
 public:
-	ConcreteTask(InternalFuture<Arg>&& arg, Function&& func, const TokenQueuePtr& cont) :
-		Base{std::move(func), cont}, m_arg{std::move(arg)}
+	ConcreteTask(InternalFuture<Arg>&& arg, Function&& func) : Base{std::move(func)}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -236,8 +240,8 @@ private:
 	using Base = Continuation<void, Function>;
 
 public:
-	ConcreteTask(InternalFuture<void>&& arg, Function&& func, const TokenQueuePtr& cont) :
-		Base{std::move(func), cont}, m_arg{std::move(arg)}
+	ConcreteTask(InternalFuture<void>&& arg, Function&& func) :
+		Base{std::move(func)}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -268,9 +272,9 @@ private:
 };
 
 template <typename T, typename Function, template <typename> class InternalFuture>
-auto MakeTask(InternalFuture<T>&& arg, Function&& func, const TokenQueuePtr& cont)
+auto MakeTask(InternalFuture<T>&& arg, Function&& func)
 {
-	return std::make_shared<ConcreteTask<T, Function, InternalFuture>>(std::move(arg), std::forward<Function>(func), cont);
+	return std::make_shared<ConcreteTask<T, Function, InternalFuture>>(std::move(arg), std::forward<Function>(func));
 }
 
 class DefaultExecutor : public ExecutorBase<DefaultExecutor>
@@ -365,38 +369,42 @@ class BrightFuture
 public:
 	using value_type = T;
 	
-public:
+private:
 	BrightFuture() = default;
 	BrightFuture(BrightFuture&&) noexcept = default;
+	BrightFuture(const BrightFuture&) = default;
 	BrightFuture& operator=(BrightFuture&&) noexcept = default;
+	BrightFuture& operator=(const BrightFuture&) noexcept = default;
 	
 	explicit BrightFuture(TokenQueuePtr token) noexcept : m_token{std::move(token)}
 	{
 	}
 	~BrightFuture() = default;
-	
+
+	// Only allow Inherited class to construct
+	friend Inherited;
+
+public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host = DefaultExecutor::Instance())
 	{
 		assert(valid());
 		
-		// The promise of the next continuation routine's token. It is not _THIS_ continuation
-		// routine's token. We are adding the _THIS_ continuation routine (i.e. the "continuation"
-		// argument) right here, so we knows the its token.
-		//
-		// We don't know the next continuation routine's token yet. It will be known when Then()
-		// is called with the future returned by this function.
-		auto next_token = std::make_shared<TokenQueue>();
-
 		// Prepare the continuation routine as a task. The function of the task is of course
 		// the continuation routine itself. The argument of the continuation routine is the
 		// result of the last async call, i.e. the variable referred by the m_shared_state future.
-		auto continuation_task = MakeTask(static_cast<Inherited*>(this)->InternalFuture(), std::forward<Func>(continuation), next_token);
-		
-		// We also need to know the promise to return value of the continuation routine as well.
-		// It will be passed to the future returned by this function.
-		auto continuation_return_value = continuation_task->Result();
-		
+
+		// The "InternalFuture()" returned by the inherited class may be a const std::shared_future&
+		// or a std::future&&. MakeTask() will perfectly forward both.
+		auto continuation_task = MakeTask(
+			static_cast<Inherited&>(*this).InternalFuture(),
+			std::forward<Func>(continuation)
+		);
+
+		// The future to the return of the continuation routine to support chaining. It's the return
+		// value of this function.
+		auto continuation_future = MakeFuture(continuation_task);
+
 		// Add the continuation routine to the executor, which will run the task and set its return
 		// value to the promise above. A token to the task is returned. We use this token to schedule
 		// the continuation routine.
@@ -417,8 +425,7 @@ public:
 		if (!m_token->PushBack(continuation_token))
 			host->Schedule(continuation_token);
 		
-		// Finally, return the future to the return of the continuation routine to support chaining.
-		return MakeFuture(std::move(continuation_return_value), std::move(next_token));
+		return continuation_future;
 	}
 
 	void wait()
@@ -452,12 +459,6 @@ public:
 		return static_cast<Inherited*>(this)->InternalFuture().wait_until(time_point);
 	}
 
-	template <typename Type>
-	static auto MakeFuture(std::future<Type>&& shared_state, TokenQueuePtr&& token)
-	{
-		return future<Type>{std::move(shared_state), std::move(token)};
-	}
-
 protected:
 	TokenQueuePtr       m_token{std::make_shared<TokenQueue>()};
 };
@@ -472,7 +473,7 @@ public:
 	shared_future(shared_future&&) noexcept = default;
 	shared_future& operator=(shared_future&&) noexcept = default;
 	
-	shared_future(const shared_future& rhs) : Base{rhs.Base::m_token}, m_shared_state{rhs.m_shared_state}
+	shared_future(const shared_future& rhs) :Base{rhs}, m_shared_state{rhs.m_shared_state}
 	{
 	}
 	
@@ -560,21 +561,27 @@ private:
 	std::future<T> m_shared_state;
 };
 
+template <typename Task>
+auto MakeFuture(const std::shared_ptr<Task>& task)
+{
+	return future<typename Task::Ret>{task->Result(), task->Token()};
+}
+
 template <typename Func>
 auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 {
 	using T = decltype(func());
 	
-	auto cont = std::make_shared<TokenQueue>();
+	// The argument to func is already ready, because there is none.
 	std::promise<void> arg;
 	arg.set_value();
-	
-	auto task   = std::make_shared<ConcreteTask<void, Func, std::future>>(arg.get_future(), std::forward<Func>(func), cont);
-	auto result = task->Result();
-	
+
+	auto task   = MakeTask(arg.get_future(), std::forward<Func>(func));
+	auto result = MakeFuture(task);
+
 	exe->Execute(std::move(task));
 	
-	return future<T>::MakeFuture(std::move(result), std::move(cont));
+	return result;
 }
 
 template <typename T>
