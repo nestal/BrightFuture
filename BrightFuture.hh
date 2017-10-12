@@ -266,12 +266,19 @@ public:
 		return future<T>{m_shared_state.get_future(), m_cont};
 	}
 
-	void set_value(T&& t)
+	template <typename T1=T>
+	typename std::enable_if<!std::is_void<T1>::value>::type set_value(T1&& t)
 	{
 		m_shared_state.set_value(std::move(t));
 		m_cont->TryContinue();
 	}
 
+	template <typename T1=T>
+	typename std::enable_if<std::is_void<T1>::value>::type set_value()
+	{
+		m_shared_state.set_value();
+		m_cont->TryContinue();
+	}
 private:
 	std::promise<T>     m_shared_state;
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
@@ -331,29 +338,6 @@ template <typename Callable>
 struct ReturnType<void, Callable>
 {
 	using Type = typename std::result_of<Callable()>::type;
-};
-
-template <>
-class promise<void>
-{
-public:
-	promise() = default;
-
-	auto get_future()
-	{
-		return future<void>{m_shared_state.get_future(), m_cont};
-	}
-
-	void set_value()
-	{
-		m_shared_state.set_value();
-		m_cont->TryContinue();
-	}
-
-private:
-	std::promise<void>  m_shared_state;
-	//! Token of the continuation routine that consumes the return value, after it is ready.
-	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
 template <typename Arg, typename Callable, typename StdFutureArg>
@@ -490,16 +474,16 @@ private:
 	std::mutex                          m_mux;
 	std::condition_variable             m_cond;
 	std::deque<std::function<void()>>   m_queue;
-	std::atomic<bool> m_quit{false};
+	std::atomic<bool>                   m_quit{false};
 	std::atomic<decltype(m_queue.size())> m_count{0};
 };
 
-template <typename Func, typename InternalFuture>
-auto Async(Func&& continuation, InternalFuture&& ifuture, TokenQueue *token_queue, Executor *host)
+template <typename Func, typename StdFuture>
+auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Executor *host)
 {
 	assert(ifuture.valid());
 
-	auto task      = MakeTask(std::forward<InternalFuture>(ifuture), std::forward<Func>(continuation));
+	auto task      = MakeTask(std::forward<StdFuture>(ifuture), std::forward<Func>(continuation));
 	auto future    = task->GetFuture();
 	auto token     = host->Add([task=std::move(task)]{task->Execute();});
 
@@ -552,7 +536,7 @@ public:
 				result.push_back(std::move(p.second));
 			lock.unlock();
 
-			// m_promise and m_token are both thread-safe, no need to protect them
+			// m_promise is thread-safe, no need to protect it
 			m_promise.set_value(std::move(result));
 		}
 	}
