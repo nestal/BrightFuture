@@ -467,8 +467,8 @@ class shared_future : public BrightFuture<T, shared_future<T>>
 {
 public:
 	using Base = BrightFuture<T, shared_future<T>>;
-	using Base::BrightFuture;
-	
+
+	shared_future() = default;
 	shared_future(shared_future&&) noexcept = default;
 	shared_future& operator=(shared_future&&) noexcept = default;
 	
@@ -517,8 +517,8 @@ class future : public BrightFuture<T, future<T>>
 {
 public:
 	using Base = BrightFuture<T, future<T>>;
-	using Base::BrightFuture;
-	
+
+	future() = default;
 	future(future&&) noexcept = default;
 	future& operator=(future&&) noexcept = default;
 	future(const future& future) = delete;
