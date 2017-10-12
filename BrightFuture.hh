@@ -114,9 +114,6 @@ private:
 	// Only allow Inherited class to construct
 	friend Inherited;
 
-	template <typename Func, typename InternalFuture>
-	auto Then(Func&& continuation, InternalFuture&& future, Executor *host);
-
 public:
 	void wait()
 	{
@@ -163,7 +160,7 @@ public:
 	shared_future(shared_future&&) noexcept = default;
 	shared_future& operator=(shared_future&&) noexcept = default;
 
-	shared_future(const shared_future& rhs) :Base{rhs}, m_shared_state{rhs.m_shared_state}
+	shared_future(const shared_future& rhs) : Base{rhs}, m_shared_state{rhs.m_shared_state}
 	{
 	}
 
@@ -171,15 +168,10 @@ public:
 	{
 	}
 
-	shared_future<T> share()
-	{
-		return *this;
-	}
-
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host)
 	{
-		return Then(std::forward<Func>(continuation), std::shared_future<T>{m_shared_state}, host);
+		return Async(std::forward<Func>(continuation), std::shared_future<T>{m_shared_state}, Base::m_token.get(), host);
 	}
 
 	template <typename R=T>
@@ -233,7 +225,7 @@ public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host)
 	{
-		return Then(std::forward<Func>(continuation), std::move(m_shared_state), host);
+		return Async(std::forward<Func>(continuation), std::move(m_shared_state), Base::m_token.get(), host);
 	}
 
 	template <typename R=T>
@@ -509,28 +501,14 @@ private:
 	std::atomic<decltype(m_queue.size())> m_count{0};
 };
 
-template <typename T, typename Inherited>
 template <typename Func, typename InternalFuture>
-auto BrightFuture<T, Inherited>::Then(Func&& continuation, InternalFuture&& future, Executor *host)
+auto Async(Func&& continuation, InternalFuture&& future, TokenQueue *token, Executor *host)
 {
 	assert(future.valid());
 
-	// Prepare the continuation routine as a task. The function of the task is of course
-	// the continuation routine itself. The argument of the continuation routine is the
-	// result of the last async call, i.e. the variable referred by the m_shared_state future.
-
-	// The "InternalFuture()" returned by the inherited class may be a const std::shared_future&
-	// or a std::future&&. MakeTask() will perfectly forward both.
-	auto continuation_task = MakeTask(std::forward<InternalFuture>(future), std::forward<Func>(continuation));
-
-	// The future to the return of the continuation routine to support chaining. It's the return
-	// value of this function.
-	auto continuation_future = continuation_task->GetFuture();
-
-	// Add the continuation routine to the executor, which will run the task and set its return
-	// value to the promise above. A token to the task is returned. We use this token to schedule
-	// the continuation routine.
-	auto continuation_token = host->Add([task=std::move(continuation_task)]{task->Execute();});
+	auto continuation_task      = MakeTask(std::forward<InternalFuture>(future), std::forward<Func>(continuation));
+	auto continuation_future    = continuation_task->GetFuture();
+	auto continuation_token     = host->Add([task=std::move(continuation_task)]{task->Execute();});
 
 	assert(continuation_token.host);
 	assert(continuation_token.host == host);
@@ -544,7 +522,7 @@ auto BrightFuture<T, Inherited>::Then(Func&& continuation, InternalFuture&& futu
 	// Otherwise, PushBack() will returns true, that means the last async call has not finished
 	// and the continuation_token is added to the queue. In this case the token will be Scheduled()
 	// by the async call when it finishes. We don't need to call Schedule() ourselves.
-	if (!m_token->PushBack(continuation_token))
+	if (!token || !token->PushBack(continuation_token))
 		host->Schedule(continuation_token);
 
 	return continuation_future;
@@ -558,13 +536,7 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	// The argument to func is already ready, because there is none.
 	std::promise<void> arg;
 	arg.set_value();
-
-	auto task   = MakeTask(arg.get_future(), std::forward<Func>(func));
-	auto result = task->GetFuture();
-
-	exe->Execute([task=std::move(task)]{task->Execute();});
-	
-	return result;
+	return Async(std::forward<Func>(func), arg.get_future(), {}, exe);
 }
 
 template <typename T>
@@ -611,13 +583,14 @@ private:
 template < class InputIt >
 auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Instance())
 {
-	using T = typename std::iterator_traits<InputIt>::value_type::value_type;
+	using Future = typename std::iterator_traits<InputIt>::value_type;
+	using T      = typename Future::value_type;
 	
 	// move all futures to a vector first, because we need to know how many
 	// and InputIt only allows us to iterate them once.
-	std::vector<shared_future<T>> futures;
+	std::vector<Future> futures;
 	for (auto it = first ; it != last; it++)
-		futures.push_back(it->share());
+		futures.push_back(std::move(*it));
 
 	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(futures.size());
 	for (auto i = futures.size()*0 ; i < futures.size(); i++)
