@@ -27,7 +27,7 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 	REQUIRE(worker.size() == 2);
 	std::vector<std::thread::id> tids = {worker.front().get_id(), worker.back().get_id()};
 	
-	auto future = async([tids](std::future<void>)
+	auto future = async([tids]
 	{
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		std::this_thread::sleep_for(1000ms);
@@ -63,7 +63,7 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	auto tid = std::this_thread::get_id();
 	
 	bool executed{false};
-	auto future = async([&executed, tid](std::future<void>)
+	auto future = async([&executed, tid]
 	{
 		REQUIRE(tid == std::this_thread::get_id());
 		std::this_thread::sleep_for(200ms);
@@ -102,7 +102,7 @@ TEST_CASE( "Two executors", "[normal]" )
 	
 	// Call async() to run something on exe1. Since exe1 has only one thread,
 	// the ID of the thread running the task must be thread1.
-	auto future = async([tid=thread1.get_id(), &run1](std::future<void>)
+	auto future = async([tid=thread1.get_id(), &run1]
 	{
 		REQUIRE(std::this_thread::get_id() == tid);
 		run1 = true;
@@ -138,8 +138,8 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	SECTION("2 future<int>'s")
 	{
 		std::vector<future<int>> futures;
-		futures.push_back(async([](std::future<void>) { return 100; }, &exe1));
-		futures.push_back(async([](std::future<void>) { return 101; }, &exe2));
+		futures.push_back(async([]{ return 100; }, &exe1));
+		futures.push_back(async([]{ return 101; }, &exe2));
 		
 		result = when_all(futures.begin(), futures.end(), &exe1).then(
 			[](std::future<std::vector<int>> fints)
@@ -155,8 +155,8 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 	SECTION("2 shared_future<int>'s")
 	{
 		std::vector<shared_future<int>> futures;
-		futures.push_back(async([](std::future<void>) { return 100; }, &exe1).share());
-		futures.push_back(async([](std::future<void>) { return 101; }, &exe2).share());
+		futures.push_back(async([]{ return 100; }, &exe1).share());
+		futures.push_back(async([]{ return 101; }, &exe2).share());
 		result = when_all(futures.begin(), futures.end(), &exe1).then(
 			[](std::future<std::vector<int>> fints)
 			{
@@ -188,7 +188,7 @@ TEST_CASE("future<void>::then()", "[normal]")
 	
 	bool run{false};
 	
-	auto future = async([](std::future<void>){std::this_thread::sleep_for(100ms);}, &exe);
+	auto future = async([]{std::this_thread::sleep_for(100ms);}, &exe);
 	future.then([&run](std::future<void>){
 		run = true;
 	}, &exe).wait();
@@ -205,17 +205,25 @@ TEST_CASE("test shared_future::then()", "[normal]")
 	QueueExecutor exe;
 	auto thread = exe.Spawn();
 	
-	bool run{false};
+	bool run1{false}, run2{false};
 	
-	auto future = async([](std::future<void>){std::this_thread::sleep_for(100ms);}, &exe).share();
+	auto future = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
 	auto copy = future;
 	
-	copy.then([&run](std::shared_future<void>){
-		run = true;
-	}, &exe).wait();
-	
+	auto copy_cont = copy.then([&run1](std::shared_future<void>){
+		run1 = true;
+	}, &exe);
+
+	auto future_cont = future.then([&run2](std::shared_future<void>){
+		run2 = true;
+	}, &exe);
+
+	copy_cont.wait();
+	future_cont.wait();
+
+	REQUIRE(run1);
+	REQUIRE(run2);
+
 	exe.Quit();
 	thread.join();
-	
-	REQUIRE(run);
 }

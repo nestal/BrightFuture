@@ -483,13 +483,34 @@ auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Ex
 	return future;
 }
 
+template <typename F> struct Adapator
+{
+	F   func;
+	using Ret = decltype(func());
+
+	template <typename F1>
+	Adapator(F1&& f) : func{std::forward<F1>(f)}{}
+
+	template <typename R=Ret>
+	typename std::enable_if<std::is_void<R>::value>::type operator()(std::future<void>)
+	{
+		func();
+	}
+	template <typename R=Ret>
+	typename std::enable_if<!std::is_void<R>::value, R>::type operator()(std::future<void>)
+	{
+		return func();
+	}
+};
+
 template <typename Func>
 auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 {
 	// The argument to func is already ready, because there is none.
 	std::promise<void> arg;
 	arg.set_value();
-	return Async(std::forward<Func>(func), arg.get_future(), {}, exe);
+
+	return Async(Adapator<Func>(std::forward<Func>(func)), arg.get_future(), {}, exe);
 }
 
 template <typename T>
@@ -506,8 +527,12 @@ public:
 		// The executor may run this function in different threads.
 		// make sure they don't step in each others.
 		std::unique_lock<std::mutex> lock{m_mux};
-		
+
+		// What if this line throw? Where should we store the exception
+		// pointer? We only have one promise.
+		// TODO: should settle this before locking the mutex
 		m_values.emplace(index, std::move(fut.get()));
+
 		if (m_values.size() == m_total)
 		{
 			std::vector<T> result;
