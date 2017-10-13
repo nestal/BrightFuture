@@ -123,13 +123,14 @@ public:
 
 	bool valid() const
 	{
-		return static_cast<const Inherited*>(this)->InternalFuture().valid() && m_token;
+		return static_cast<const Inherited*>(this)->InternalFuture().valid() && (m_token || is_ready());
 	}
 
 	bool is_ready() const
 	{
-		assert(valid());
-		return static_cast<const Inherited*>(this)->InternalFuture().wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
+		auto&& fut = static_cast<const Inherited*>(this)->InternalFuture();
+		assert(fut.valid());
+		return fut.wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
 	}
 
 	template <typename Rep, typename Ratio>
@@ -336,12 +337,29 @@ struct ReturnType
 	using Type = typename std::result_of<Callable(Arg&&)>::type;
 };
 
+// maps std::future        -> BrightFuture::future
+// maps std::shared_future -> BrightFuture::shared_future
+template <typename StdFuture>
+struct Brighten;
+
+template <typename T>
+struct Brighten<std::future<T>>
+{
+	using Type = future<T>;
+};
+
+template <typename T>
+struct Brighten<std::shared_future<T>>
+{
+	using Type = shared_future<T>;
+};
+
 template <typename FutureArg, typename Callable>
 class Task
 {
 public:
 	using Arg = decltype(std::declval<FutureArg>().get());  //!< Argument of "Function". It may be void.
-	using Ret = typename ReturnType<FutureArg, Callable>::Type;   //!< Return value of "Function". It may be void.
+	using Ret = typename ReturnType<typename Brighten<FutureArg>::Type, Callable>::Type;   //!< Return value of "Function". It may be void.
 
 public:
 	Task(FutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
@@ -356,13 +374,13 @@ public:
 	template <typename R=Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Execute()
 	{
-		m_return.set_value(m_function(std::move(m_arg)));
+		m_return.set_value(m_function(typename Brighten<FutureArg>::Type{std::move(m_arg), {}}));
 	}
 
 	template <typename R=Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Execute()
 	{
-		m_function(std::move(m_arg));
+		m_function(typename Brighten<FutureArg>::Type{std::move(m_arg), {}});
 		m_return.set_value();
 	}
 
@@ -491,12 +509,12 @@ template <typename Func> struct Adapator
 	Adapator(F1&& f) : func{std::forward<F1>(f)}{}
 
 	template <typename R=decltype(func())>
-	typename std::enable_if<std::is_void<R>::value>::type operator()(std::future<void>)
+	typename std::enable_if<std::is_void<R>::value>::type operator()(future<void>)
 	{
 		func();
 	}
 	template <typename R=decltype(func())>
-	typename std::enable_if<!std::is_void<R>::value, R>::type operator()(std::future<void>)
+	typename std::enable_if<!std::is_void<R>::value, R>::type operator()(future<void>)
 	{
 		return func();
 	}
