@@ -123,14 +123,12 @@ public:
 
 	bool valid() const
 	{
-		return static_cast<const Inherited*>(this)->InternalFuture().valid() && (m_token || is_ready());
+		return static_cast<const Inherited*>(this)->InternalFuture().valid() && m_token;
 	}
 
 	bool is_ready() const
 	{
-		auto&& fut = static_cast<const Inherited*>(this)->InternalFuture();
-		assert(fut.valid());
-		return fut.wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
+		return static_cast<const Inherited*>(this)->InternalFuture().wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
 	}
 
 	template <typename Rep, typename Ratio>
@@ -147,6 +145,9 @@ public:
 		return static_cast<Inherited*>(this)->InternalFuture().wait_until(time_point);
 	}
 
+	template <typename Func, typename Future>
+	friend auto Async(Func&& continuation, Future&& future, Executor *host);
+	
 protected:
 	TokenQueuePtr       m_token{std::make_shared<TokenQueue>()};
 };
@@ -173,7 +174,7 @@ public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host)
 	{
-		return Async(std::forward<Func>(continuation), std::shared_future<T>{m_shared_state}, Base::m_token.get(), host);
+		return Async(std::forward<Func>(continuation), shared_future<T>{*this}, host);
 	}
 
 	template <typename R=T>
@@ -228,7 +229,7 @@ public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host)
 	{
-		return Async(std::forward<Func>(continuation), std::move(m_shared_state), Base::m_token.get(), host);
+		return Async(std::forward<Func>(continuation), std::move(*this), host);
 	}
 
 	template <typename R=T>
@@ -331,42 +332,19 @@ private:
 	std::intptr_t m_seq{0};
 };
 
-template <typename Arg, typename Callable>
-struct ReturnType
-{
-	using Type = typename std::result_of<Callable(Arg&&)>::type;
-};
-
-// maps std::future        -> BrightFuture::future
-// maps std::shared_future -> BrightFuture::shared_future
-template <typename StdFuture>
-struct Brighten;
-
-template <typename T>
-struct Brighten<std::future<T>>
-{
-	using Type = future<T>;
-};
-
-template <typename T>
-struct Brighten<std::shared_future<T>>
-{
-	using Type = shared_future<T>;
-};
-
-template <typename FutureArg, typename Callable>
+template <typename Future, typename Callable>
 class Task
 {
 public:
-	using Arg = decltype(std::declval<FutureArg>().get());  //!< Argument of "Function". It may be void.
-	using Ret = typename ReturnType<typename Brighten<FutureArg>::Type, Callable>::Type;   //!< Return value of "Function". It may be void.
+	//! Return value of "Callable". It may be void.
+	using Ret = typename std::result_of<Callable(Future&&)>::type;
 
 public:
-	Task(FutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
+	Task(Future&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
 	{
 	}
 
-	auto GetFuture()
+	auto GetResult()
 	{
 		return m_return.get_future();
 	}
@@ -374,20 +352,20 @@ public:
 	template <typename R=Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Execute()
 	{
-		m_return.set_value(m_function(typename Brighten<FutureArg>::Type{std::move(m_arg), {}}));
+		m_return.set_value(m_function(std::move(m_arg)));
 	}
 
 	template <typename R=Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Execute()
 	{
-		m_function(typename Brighten<FutureArg>::Type{std::move(m_arg), {}});
+		m_function(std::move(m_arg));
 		m_return.set_value();
 	}
 
 private:
 	promise<Ret>    m_return;       //!< Promise to the return value of the function to be called.
 	Callable        m_function;     //!< Function to be called in Execute().
-	FutureArg       m_arg;          //!< Argument to the function to be called in Execute().
+	Future          m_arg;          //!< Argument to the function to be called in Execute().
 };
 
 template <typename Future, typename Function>
@@ -477,13 +455,16 @@ private:
 	std::atomic<decltype(m_queue.size())> m_count{0};
 };
 
-template <typename Func, typename StdFuture>
-auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Executor *host)
+template <typename Func, typename Future>
+auto Async(Func&& continuation, Future&& future, Executor *host)
 {
-	assert(ifuture.valid());
+	assert(future.valid());
 
-	auto task      = MakeTask(std::move(ifuture), std::forward<Func>(continuation));
-	auto future    = task->GetFuture();
+	auto token_queue = future.m_token;
+	assert(token_queue);
+	
+	auto task      = MakeTask(std::move(future), std::forward<Func>(continuation));
+	auto result    = task->GetResult();
 	auto token     = host->Add([task=std::move(task)]{task->Execute();});
 
 	// There is a race condition here: whether or not the last async call has finished or not.
@@ -495,18 +476,18 @@ auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Ex
 	// Otherwise, PushBack() will returns true, that means the last async call has not finished
 	// and the cont_token is added to the queue. In this case the token will be Scheduled()
 	// by the async call when it finishes. We don't need to call Schedule() ourselves.
-	if (!token_queue || !token_queue->PushBack(token))
+	if (!token_queue->PushBack(token))
 		host->Schedule(token);
 
-	return future;
+	return result;
 }
 
 template <typename Func> struct Adapator
 {
 	Func func;
 
-	template <typename F1>
-	Adapator(F1&& f) : func{std::forward<F1>(f)}{}
+	template <typename F>
+	Adapator(F&& f) : func{std::forward<F>(f)}{}
 
 	template <typename R=decltype(func())>
 	typename std::enable_if<std::is_void<R>::value>::type operator()(future<void>)
@@ -524,10 +505,10 @@ template <typename Func>
 auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 {
 	// The argument to func is already ready, because there is none.
-	std::promise<void> arg;
+	promise<void> arg;
 	arg.set_value();
 
-	return Async(Adapator<Func>{std::forward<Func>(func)}, arg.get_future(), {}, exe);
+	return Async(Adapator<Func>{std::forward<Func>(func)}, arg.get_future(), exe);
 }
 
 template <typename T>
