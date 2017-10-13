@@ -157,7 +157,6 @@ class shared_future : public BrightFuture<T, shared_future<T>>
 {
 public:
 	using Base = BrightFuture<T, shared_future<T>>;
-	template <typename U> using Rebound = std::shared_future<U>;
 
 	shared_future() = default;
 	shared_future(shared_future&&) noexcept = default;
@@ -209,7 +208,6 @@ class future : public BrightFuture<T, future<T>>
 {
 public:
 	using Base = BrightFuture<T, future<T>>;
-	template <typename U> using Rebound = std::future<U>;
 
 	future() = default;
 	future(future&&) noexcept = default;
@@ -221,7 +219,7 @@ public:
 	{
 	}
 
-	shared_future<T> share()
+	auto share()
 	{
 		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token)};
 	}
@@ -522,26 +520,30 @@ public:
 	{
 	}
 
-	template <typename U>
-	void Process(U&& fut, std::size_t index)
+	template <typename Future> // Should be future<T> or shared_future<T>
+	void Process(Future&& fut, std::size_t index)
 	{
+		// What if this line throw? Where should we store the exception
+		// pointer? We only have one promise.
+		auto&& val = fut.get();
+		
 		// The executor may run this function in different threads.
 		// make sure they don't step in each others.
 		std::unique_lock<std::mutex> lock{m_mux};
+		
+		// Add the transient results to the map.
+		assert(m_values.size() < m_total);
+		m_values.emplace(index, std::move(val));
 
-		// What if this line throw? Where should we store the exception
-		// pointer? We only have one promise.
-		// TODO: should settle this before locking the mutex
-		m_values.emplace(index, std::move(fut.get()));
-
+		// If all results are ready, transfer them to the promise.
 		if (m_values.size() == m_total)
 		{
 			std::vector<T> result;
 			for (auto&& p : m_values)
 				result.push_back(std::move(p.second));
-			lock.unlock();
 
-			// m_promise is thread-safe, no need to protect it
+			// m_promise is thread-safe, no need to protect it.
+			lock.unlock();
 			m_promise.set_value(std::move(result));
 		}
 	}

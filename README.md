@@ -20,6 +20,8 @@ it has the following goals:
 *   Extensible to any other multi-threaded frameworks.
 *   Use an interfere similar to the upcoming Concurrency TS for easy
 	migration.
+*   Can specify exactly which thread (or thread pool) to run a certain
+	async task or continuation routine.
 
 # Usage
 
@@ -38,18 +40,18 @@ int main()
 	auto workers = exe.Spawn(3);
 	
 	// Run a task asynchronously. Returns a future to the result.
-	auto future = async([]
+	async([]
 	{
 		std::this_thread::sleep_for(2s);
 		return 100;
-	}, &exe);
+	}, &exe).
 	
 	// Attach a continuation routine, which will be run when the
 	// async task is finished. The argument of the continuation
 	// routine is the return value of the async task (i.e. 100).
 	// The continuation routine will be run in the thread specified
 	// by the executor (i.e. sch).
-	future.then([](future<int> val)
+	then([](future<int> val)
 	{
 		assert(val.get() == 100);
 		return "abc"s;
@@ -100,6 +102,7 @@ There are a few features missing in BrightFuture that are supported by
 `std::experimental::future`:
 
 *   Unwrapping constructor: i.e. `future<T>::future( future<future<T>&& t)`
+*   Future of references: i.e. `future<T&>`
 
 While it is not impossible to implement these features, doing so will
 compromise the simple design. The library will become much bigger and
