@@ -173,7 +173,7 @@ public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host)
 	{
-		return Async(std::forward<Func>(continuation), shared_future<T>{*this}, host);
+		return Async(std::forward<Func>(continuation), shared_future{*this}, host);
 	}
 
 	template <typename R=T>
@@ -338,7 +338,7 @@ public:
 	using Ret = typename std::result_of<Callable(Future&&)>::type;
 
 public:
-	Task(Future&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
+	Task(Future&& arg, Callable&& func) : m_function{std::forward<Callable>(func)}, m_arg{std::forward<Future>(arg)}
 	{
 	}
 
@@ -365,12 +365,6 @@ private:
 	Callable        m_function;     //!< Function to be called in Execute().
 	Future          m_arg;          //!< Argument to the function to be called in Execute().
 };
-
-template <typename Future, typename Function>
-auto MakeTask(Future&& arg, Function&& func)
-{
-	return std::make_shared<Task<Future, Function>>(std::move(arg), std::forward<Function>(func));
-}
 
 class DefaultExecutor : public ExecutorBase<DefaultExecutor>
 {
@@ -462,7 +456,7 @@ auto Async(Func&& continuation, Future&& future, Executor *host)
 	auto token_queue = future.m_token;
 	assert(token_queue);
 	
-	auto task      = MakeTask(std::move(future), std::forward<Func>(continuation));
+	auto task      = std::make_shared<Task<Future, Func>>(std::forward<Future>(future), std::forward<Func>(continuation));
 	auto result    = task->GetResult();
 	auto token     = host->Add([task=std::move(task)]{task->Execute();});
 
@@ -487,8 +481,9 @@ private:
 	NullaryFunc m_func;
 
 public:
+	// Add 1st argument to avoid overriding copy/move ctor.
 	template <typename F>
-	AdaptToUnary(F&& f) : m_func{std::forward<F>(f)}{}
+	explicit AdaptToUnary(std::nullptr_t, F&& f) : m_func{std::forward<F>(f)}{}
 
 	template <typename R=decltype(m_func())>
 	typename std::enable_if<std::is_void<R>::value>::type operator()(future<void>)
@@ -509,27 +504,27 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	promise<void> arg;
 	arg.set_value();
 
-	return Async(AdaptToUnary<Func>{std::forward<Func>(func)}, arg.get_future(), exe);
+	return Async(AdaptToUnary<Func>{nullptr, std::forward<Func>(func)}, arg.get_future(), exe);
 }
 
 template <typename T>
 class IntermediateResultOfWhenAll
 {
 public:
-	explicit IntermediateResultOfWhenAll(std::size_t total) : m_total{total}
-	{
-	}
+	explicit IntermediateResultOfWhenAll(std::size_t total) : m_total{total} {}
 
 	template <typename Future> // Should be future<T> or shared_future<T>
 	void Process(Future&& fut, std::size_t index)
 	{
 		// What if this line throw? Where should we store the exception
 		// pointer? We only have one promise.
+		assert(fut.valid());
 		auto&& val = fut.get();
 		
 		// The executor may run this function in different threads.
 		// make sure they don't step in each others.
 		std::unique_lock<std::mutex> lock{m_mux};
+		assert(index < m_total);
 		
 		// Add the transient results to the map.
 		assert(m_values.size() < m_total);
@@ -576,7 +571,7 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	for (auto i = futures.size()*0 ; i < futures.size(); i++)
 		futures[i].then([intermediate, i](auto&& fut)
 		{
-			intermediate->Process(std::move(fut), i);
+			intermediate->Process(std::forward<decltype(fut)>(fut), i);
 		}, exe);
 	
 	return intermediate->Result();
