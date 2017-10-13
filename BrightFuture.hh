@@ -31,8 +31,8 @@ class Executor
 {
 public:
 	virtual ~Executor() = default;
-	virtual void Execute(const std::function<void()>& task) = 0;
-	virtual Token Add(const std::function<void()>& task) = 0;
+	virtual void Execute(std::function<void()>&& task) = 0;
+	virtual Token Add(std::function<void()>&& task) = 0;
 	virtual void Schedule(Token token) = 0;
 };
 /**
@@ -294,11 +294,11 @@ class ExecutorBase : public Executor
 public:
 	ExecutorBase() = default;
 
-	Token Add(const std::function<void()>& task) override
+	Token Add(std::function<void()>&& task) override
 	{
 		std::unique_lock<std::mutex> lock{m_mutex};
 		auto event = m_seq++;
-		m_tasks.emplace(event, task);
+		m_tasks.emplace(event, std::move(task));
 		return {this, event};
 	}
 
@@ -317,13 +317,13 @@ public:
 		
 		// m_task_mutex does not protect m_executor, which is thread-safe.
 		if (task)
-			Execute(task);
+			Execute(std::move(task));
 	}
 
-	void Execute(const std::function<void()>& task) override
+	void Execute(std::function<void()>&& task) override
 	{
 		// Use CRTP to call ConcreteExecutor::Execute().
-		static_cast<ConcreteExecutor*>(this)->ExecuteTask(task);
+		static_cast<ConcreteExecutor*>(this)->ExecuteTask(std::move(task));
 	}
 
 private:
@@ -378,9 +378,9 @@ class DefaultExecutor : public ExecutorBase<DefaultExecutor>
 {
 public:
 	// Called by ExecutorBase using CRTP
-	void ExecuteTask(const std::function<void()>& task)
+	void ExecuteTask(std::function<void()>&& task)
 	{
-		std::thread{task}.detach();
+		std::thread{std::move(task)}.detach();
 	}
 	
 	static DefaultExecutor* Instance()
@@ -440,10 +440,10 @@ public:
 	}
 	
 	// Called by ExecutorBase using CRTP
-	void ExecuteTask(const std::function<void()>& task)
+	void ExecuteTask(std::function<void()>&& task)
 	{
 		std::unique_lock<std::mutex> lock{m_mux};
-		m_queue.push_back(task);
+		m_queue.push_back(std::move(task));
 		m_cond.notify_one();
 	}
 	
@@ -459,6 +459,7 @@ template <typename Func, typename Future>
 auto Async(Func&& continuation, Future&& future, Executor *host)
 {
 	assert(future.valid());
+	assert(host);
 
 	auto token_queue = future.m_token;
 	assert(token_queue);
@@ -482,22 +483,24 @@ auto Async(Func&& continuation, Future&& future, Executor *host)
 	return result;
 }
 
-template <typename Func> struct Adapator
+template <typename NullaryFunc> class AdaptToUnary
 {
-	Func func;
+private:
+	NullaryFunc m_func;
 
+public:
 	template <typename F>
-	Adapator(F&& f) : func{std::forward<F>(f)}{}
+	AdaptToUnary(F&& f) : m_func{std::forward<F>(f)}{}
 
-	template <typename R=decltype(func())>
+	template <typename R=decltype(m_func())>
 	typename std::enable_if<std::is_void<R>::value>::type operator()(future<void>)
 	{
-		func();
+		m_func();
 	}
-	template <typename R=decltype(func())>
+	template <typename R=decltype(m_func())>
 	typename std::enable_if<!std::is_void<R>::value, R>::type operator()(future<void>)
 	{
-		return func();
+		return m_func();
 	}
 };
 
@@ -508,7 +511,7 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	promise<void> arg;
 	arg.set_value();
 
-	return Async(Adapator<Func>{std::forward<Func>(func)}, arg.get_future(), exe);
+	return Async(AdaptToUnary<Func>{std::forward<Func>(func)}, arg.get_future(), exe);
 }
 
 template <typename T>
