@@ -333,7 +333,7 @@ private:
 template <typename Arg, typename Callable>
 struct ReturnType
 {
-	using Type = typename std::result_of<Callable(std::future<Arg>&&)>::type;
+	using Type = typename std::result_of<Callable(Arg&&)>::type;
 };
 
 template <typename FutureArg, typename Callable>
@@ -341,7 +341,7 @@ class Task
 {
 public:
 	using Arg = decltype(std::declval<FutureArg>().get());  //!< Argument of "Function". It may be void.
-	using Ret = typename ReturnType<Arg, Callable>::Type;   //!< Return value of "Function". It may be void.
+	using Ret = typename ReturnType<FutureArg, Callable>::Type;   //!< Return value of "Function". It may be void.
 
 public:
 	Task(FutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
@@ -483,9 +483,9 @@ auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Ex
 	return future;
 }
 
-template <typename F> struct Adapator
+template <typename Func> struct Adapator
 {
-	F   func;
+	Func func;
 	using Ret = decltype(func());
 
 	template <typename F1>
@@ -510,7 +510,7 @@ auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 	std::promise<void> arg;
 	arg.set_value();
 
-	return Async(Adapator<Func>(std::forward<Func>(func)), arg.get_future(), {}, exe);
+	return Async(Adapator<Func>{std::forward<Func>(func)}, arg.get_future(), {}, exe);
 }
 
 template <typename T>
