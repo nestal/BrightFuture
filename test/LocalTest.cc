@@ -36,11 +36,13 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 	
 	fut.then([tids](future<int> val)
 	{
+		REQUIRE(val.is_ready());
 		REQUIRE(val.get() == 100);
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		return std::string{"abc"};
 	}, &exe).then([tids](future<std::string> s)
 	{
+		REQUIRE(s.is_ready());
 		REQUIRE(s.get() == "abc");
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		std::this_thread::sleep_for(200ms);
@@ -79,6 +81,7 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	executed = false;
 	fut.then([&executed, tid](future<double> val)
 	{
+		REQUIRE(val.is_ready());
 		REQUIRE(tid == std::this_thread::get_id());
 		REQUIRE(val.get() == 0.5);
 		executed = true;
@@ -144,6 +147,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		result = when_all(futures.begin(), futures.end(), &exe1).then(
 			[](future<std::vector<int>> fints)
 			{
+				REQUIRE(fints.is_ready());
 				auto ints = fints.get();
 				REQUIRE(ints.size() == 2);
 				REQUIRE(ints.front() == 100);
@@ -160,6 +164,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		result = when_all(futures.begin(), futures.end(), &exe1).then(
 			[](future<std::vector<int>> fints)
 			{
+				REQUIRE(fints.is_ready());
 				auto ints = fints.get();
 				REQUIRE(ints.size() == 2);
 				REQUIRE(ints.front() == 100);
@@ -169,9 +174,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		);
 	}
 	
-//	std::cout << "waiting" << std::endl;
 	REQUIRE(result.get());
-//	std::cout << "wait OK" << std::endl;
 	
 	exe1.Quit();
 	exe2.Quit();
@@ -210,11 +213,15 @@ TEST_CASE("test shared_future::then()", "[normal]")
 	auto fut = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
 	auto copy = fut;
 	
-	auto copy_cont = copy.then([&run1](shared_future<void>){
+	auto copy_cont = copy.then([&run1](shared_future<void> f)
+	{
+		REQUIRE(f.is_ready());
 		run1 = true;
 	}, &exe);
 
-	auto future_cont = fut.then([&run2](shared_future<void>){
+	auto future_cont = fut.then([&run2](shared_future<void> f)
+	{
+		REQUIRE(f.is_ready());
 		run2 = true;
 	}, &exe);
 

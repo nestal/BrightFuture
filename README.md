@@ -49,9 +49,9 @@ int main()
 	// routine is the return value of the async task (i.e. 100).
 	// The continuation routine will be run in the thread specified
 	// by the executor (i.e. sch).
-	future.then([](int val)
+	future.then([](future<int> val)
 	{
-		assert(val == 100);
+		assert(val.get() == 100);
 		return "abc"s;
 	}, &exe).
 	
@@ -61,9 +61,9 @@ int main()
 	// to be run after the previous continuation routine finishes.
 	// The argument of this continuation routine is the return value
 	// of the previous continuation routine.
-	then([](const std::string& s)
+	then([](future<std::string> s)
 	{
-		assert(s == "abc"s);
+		assert(s.get() == "abc"s);
 	}, &exe).
 	
 	// You can also wait synchronously for a future to be fulfilled.
