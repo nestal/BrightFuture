@@ -486,17 +486,16 @@ auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Ex
 template <typename Func> struct Adapator
 {
 	Func func;
-	using Ret = decltype(func());
 
 	template <typename F1>
 	Adapator(F1&& f) : func{std::forward<F1>(f)}{}
 
-	template <typename R=Ret>
+	template <typename R=decltype(func())>
 	typename std::enable_if<std::is_void<R>::value>::type operator()(std::future<void>)
 	{
 		func();
 	}
-	template <typename R=Ret>
+	template <typename R=decltype(func())>
 	typename std::enable_if<!std::is_void<R>::value, R>::type operator()(std::future<void>)
 	{
 		return func();
