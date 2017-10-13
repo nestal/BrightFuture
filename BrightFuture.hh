@@ -155,6 +155,7 @@ class shared_future : public BrightFuture<T, shared_future<T>>
 {
 public:
 	using Base = BrightFuture<T, shared_future<T>>;
+	template <typename U> using Rebound = std::shared_future<U>;
 
 	shared_future() = default;
 	shared_future(shared_future&&) noexcept = default;
@@ -206,6 +207,7 @@ class future : public BrightFuture<T, future<T>>
 {
 public:
 	using Base = BrightFuture<T, future<T>>;
+	template <typename U> using Rebound = std::future<U>;
 
 	future() = default;
 	future(future&&) noexcept = default;
@@ -292,7 +294,7 @@ public:
 
 	Token Add(const std::function<void()>& task) override
 	{
-		std::unique_lock<std::mutex> lock{m_task_mutex};
+		std::unique_lock<std::mutex> lock{m_mutex};
 		auto event = m_seq++;
 		m_tasks.emplace(event, task);
 		return {this, event};
@@ -302,7 +304,7 @@ public:
 	{
 		std::function<void()> task;
 		{
-			std::unique_lock<std::mutex> lock{m_task_mutex};
+			std::unique_lock<std::mutex> lock{m_mutex};
 			auto it = m_tasks.find(token.event);
 			if (it != m_tasks.end())
 			{
@@ -323,7 +325,7 @@ public:
 	}
 
 private:
-	std::mutex  m_task_mutex;
+	std::mutex  m_mutex;
 	std::unordered_map<std::intptr_t, std::function<void()>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
@@ -331,24 +333,18 @@ private:
 template <typename Arg, typename Callable>
 struct ReturnType
 {
-	using Type = typename std::result_of<Callable(Arg&&)>::type;
+	using Type = typename std::result_of<Callable(std::future<Arg>&&)>::type;
 };
 
-template <typename Callable>
-struct ReturnType<void, Callable>
-{
-	using Type = typename std::result_of<Callable()>::type;
-};
-
-template <typename Arg, typename Callable, typename StdFutureArg>
-class Continuation
+template <typename FutureArg, typename Callable>
+class Task
 {
 public:
-	// Return value of "Function". It may be void.
-	using Ret = typename ReturnType<Arg, Callable>::Type;
+	using Arg = decltype(std::declval<FutureArg>().get());  //!< Argument of "Function". It may be void.
+	using Ret = typename ReturnType<Arg, Callable>::Type;   //!< Return value of "Function". It may be void.
 
 public:
-	Continuation(StdFutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
+	Task(FutureArg&& arg, Callable&& func) : m_function{std::move(func)}, m_arg{std::move(arg)}
 	{
 	}
 
@@ -357,44 +353,29 @@ public:
 		return m_return.get_future();
 	}
 
-	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<!std::is_void<R>::value && !std::is_void<A>::value>::type Execute()
+	template <typename R=Ret>
+	typename std::enable_if<!std::is_void<R>::value>::type Execute()
 	{
-		m_return.set_value(m_function(m_arg.get()));
+		m_return.set_value(m_function(std::move(m_arg)));
 	}
 
-	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<std::is_void<R>::value && !std::is_void<A>::value>::type Execute()
+	template <typename R=Ret>
+	typename std::enable_if<std::is_void<R>::value>::type Execute()
 	{
-		m_function(m_arg.get());
-		m_return.set_value();
-	}
-
-	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<!std::is_void<R>::value && std::is_void<A>::value>::type Execute()
-	{
-		m_arg.get();
-		m_return.set_value(m_function());
-	}
-
-	template <typename R=Ret, typename A=Arg>
-	typename std::enable_if<std::is_void<R>::value && std::is_void<A>::value>::type Execute()
-	{
-		m_arg.get();
-		m_function();
+		m_function(std::move(m_arg));
 		m_return.set_value();
 	}
 
 private:
-	StdFutureArg    m_arg;          //!< Argument to the function to be called in Execute().
 	promise<Ret>    m_return;       //!< Promise to the return value of the function to be called.
 	Callable        m_function;     //!< Function to be called in Execute().
+	FutureArg       m_arg;          //!< Argument to the function to be called in Execute().
 };
 
-template <typename T, typename Function, template <typename> class InternalFuture>
-auto MakeTask(InternalFuture<T>&& arg, Function&& func)
+template <typename Future, typename Function>
+auto MakeTask(Future&& arg, Function&& func)
 {
-	return std::make_shared<Continuation<T, Function, InternalFuture<T>>>(std::move(arg), std::forward<Function>(func));
+	return std::make_shared<Task<Future, Function>>(std::move(arg), std::forward<Function>(func));
 }
 
 class DefaultExecutor : public ExecutorBase<DefaultExecutor>
@@ -483,7 +464,7 @@ auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Ex
 {
 	assert(ifuture.valid());
 
-	auto task      = MakeTask(std::forward<StdFuture>(ifuture), std::forward<Func>(continuation));
+	auto task      = MakeTask(std::move(ifuture), std::forward<Func>(continuation));
 	auto future    = task->GetFuture();
 	auto token     = host->Add([task=std::move(task)]{task->Execute();});
 
@@ -505,8 +486,6 @@ auto Async(Func&& continuation, StdFuture&& ifuture, TokenQueue *token_queue, Ex
 template <typename Func>
 auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 {
-	using T = decltype(func());
-	
 	// The argument to func is already ready, because there is none.
 	std::promise<void> arg;
 	arg.set_value();
@@ -522,13 +501,13 @@ public:
 	}
 
 	template <typename U>
-	void Process(U&& val, std::size_t index)
+	void Process(U&& fut, std::size_t index)
 	{
 		// The executor may run this function in different threads.
 		// make sure they don't step in each others.
 		std::unique_lock<std::mutex> lock{m_mux};
 		
-		m_values.emplace(index, std::forward<U>(val));
+		m_values.emplace(index, std::move(fut.get()));
 		if (m_values.size() == m_total)
 		{
 			std::vector<T> result;
@@ -551,7 +530,7 @@ private:
 	
 	std::mutex                  m_mux;
 	std::map<std::size_t, T>    m_values;
-	const std::size_t           m_total{};
+	const std::size_t           m_total;
 };
 
 template < class InputIt >
@@ -563,14 +542,13 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 	// move all futures to a vector first, because we need to know how many
 	// and InputIt only allows us to iterate them once.
 	std::vector<Future> futures;
-	for (auto it = first ; it != last; it++)
-		futures.push_back(std::move(*it));
+	std::move(first, last, std::back_inserter(futures));
 
 	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(futures.size());
 	for (auto i = futures.size()*0 ; i < futures.size(); i++)
-		futures[i].then([intermediate, i](auto&& val)
+		futures[i].then([intermediate, i](auto&& fut)
 		{
-			intermediate->Process(std::forward<decltype(val)>(val), i);
+			intermediate->Process(std::move(fut), i);
 		}, exe);
 	
 	return intermediate->Result();
