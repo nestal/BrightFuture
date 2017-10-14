@@ -192,7 +192,7 @@ public:
 	}
 
 	template <typename R=T>
-	typename std::enable_if<!std::is_void<R>::value, const T>::type& get()
+	typename std::enable_if<!std::is_void<R>::value, const T>::type& get() const
 	{
 		assert(Base::valid());
 		return m_shared_state.get();
