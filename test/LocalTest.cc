@@ -17,6 +17,60 @@
 using namespace BrightFuture;
 using namespace Catch::Matchers;
 
+TEST_CASE( "Inline executor", "[normal]")
+{
+	auto run = false;
+	
+	InlineExecutor subject;
+	
+	SECTION("run in the same thread")
+	{
+		auto tid = std::this_thread::get_id();
+		auto fut = async(
+			[tid, &run]
+			{
+				REQUIRE(std::this_thread::get_id() == tid);
+				run = true;
+				return 100;
+			}, &subject
+		);
+		
+		// no need to wait() because everything are in this thread
+		
+		REQUIRE(fut.is_ready());
+		REQUIRE(fut.get() == 100);
+	}
+	SECTION("run in remote thread")
+	{
+		QueueExecutor exe2;
+		auto worker = exe2.Spawn();
+		auto q_tid = worker.get_id();
+		
+		auto fut = async([q_tid, &run]
+		{
+			REQUIRE(std::this_thread::get_id() == q_tid);
+			run = true;
+			return 100;
+		}, &exe2);
+
+		// The InlineExecutor will run the callbacks in the same thread that schedule them.
+		// In this case, the thread that schedule them is the QueueExecutor.
+		bool run2 = false;
+		fut.then([q_tid, &run2](future<int> fint)
+		{
+			REQUIRE(std::this_thread::get_id() == q_tid);
+			REQUIRE(fint.get() == 100);
+			run2 = true;
+		}, &subject).wait();
+		
+		REQUIRE(run2);
+		
+		exe2.Quit();
+		worker.join();
+	}
+	REQUIRE(run);
+}
+
 TEST_CASE( "Simple async multithread case", "[normal]" )
 {
 	using namespace std::chrono_literals;
