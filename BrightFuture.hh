@@ -290,18 +290,54 @@ private:
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
-template <typename T>
-future<T>::future(future<future<T>>&& wrapped, Executor *host)
+template <typename Func, typename T>
+void SetValueOrException(promise<T>& promise, Func&& func)
 {
-	promise<T> forwarder;
-	*this = forwarder.get_future();
-	
-	wrapped.then([p=std::move(forwarder), host](future<future<T>> fut) mutable
+	try
 	{
-		fut.get().then([forwarder=std::move(p)](future<T> self) mutable
+		promise.set_value(std::forward<Func>(func)());
+	}
+	catch (...)
+	{
+		promise.set_exception(std::current_exception());
+	}
+}
+
+/**
+ * \brief Unwrapping constructor of future.
+ *
+ * The unwrapping constructor construct a future<T> from a future<future<T>>.
+ *
+ * \tparam T        Type of the state share of the future
+ * \param wrapped
+ * \param host
+ */
+template <typename T>
+future<T>::future(future<future<T>>&& fut, Executor *host)
+{
+	promise<T> fwd;
+	*this = fwd.get_future();
+	
+	fut.then([fwd=std::move(fwd), host](future<future<T>> fut) mutable
+	{
+		try
 		{
-			forwarder.set_value(self.get());
-		}, host);
+			fut.get().then([fwd=std::move(fwd)](future<T> fut_get) mutable
+			{
+				try
+				{
+					fwd.set_value(fut_get.get());
+				}
+				catch (...)
+				{
+					fwd.set_exception(std::current_exception());
+				}
+			}, host);
+		}
+		catch (...)
+		{
+			fwd.set_exception(std::current_exception());
+		}
 	}, host);
 }
 
