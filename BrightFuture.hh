@@ -118,46 +118,51 @@ public:
 	void wait()
 	{
 		assert(valid());
-		static_cast<Inherited*>(this)->InternalFuture().wait();
+		SharedState().wait();
 	}
 
 	bool valid() const
 	{
-		return static_cast<const Inherited*>(this)->InternalFuture().valid() && m_token;
+		return SharedState().valid() && m_token;
 	}
 
 	bool is_ready() const
 	{
-		return static_cast<const Inherited*>(this)->InternalFuture().wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
+		return SharedState().wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
 	}
 
 	template <typename Rep, typename Ratio>
 	std::future_status wait_for(const std::chrono::duration<Rep, Ratio>& duration)
 	{
 		assert(valid());
-		return static_cast<Inherited*>(this)->InternalFuture().wait_for(duration);
+		return SharedState().wait_for(duration);
 	}
 
 	template <typename Clock, typename Duration>
 	std::future_status wait_until(const std::chrono::time_point<Clock, Duration>& time_point)
 	{
 		assert(valid());
-		return static_cast<Inherited*>(this)->InternalFuture().wait_until(time_point);
+		return SharedState().wait_until(time_point);
 	}
 
 	template <typename Func, typename Future>
-	friend auto Async(Func&& continuation, Future&& future, Executor *host);
-	
-protected:
+	friend auto Async(Func&& function, Future&& fut_arg, Executor *host);
+
+private:
+	auto& SharedState() {return static_cast<Inherited*>(this)->m_shared_state;}
+	const auto& SharedState() const {return static_cast<const Inherited*>(this)->m_shared_state;}
+
 	TokenQueuePtr       m_token{std::make_shared<TokenQueue>()};
 };
 
 template <typename T>
 class shared_future : public BrightFuture<T, shared_future<T>>
 {
-public:
+private:
 	using Base = BrightFuture<T, shared_future<T>>;
+	friend Base;
 
+public:
 	shared_future() = default;
 	shared_future(shared_future&&) noexcept = default;
 	shared_future& operator=(shared_future&&) noexcept = default;
@@ -173,6 +178,9 @@ public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host)
 	{
+#if __cplusplus >= 201703L
+		static_assert(std::is_invocable<Func, shared_future&&>::value);
+#endif
 		return Async(std::forward<Func>(continuation), shared_future{*this}, host);
 	}
 
@@ -190,25 +198,19 @@ public:
 		return m_shared_state.get();
 	}
 
-	std::shared_future<T> InternalFuture()
-	{
-		return m_shared_state;
-	}
-	const std::shared_future<T>& InternalFuture() const
-	{
-		return m_shared_state;
-	}
-
 private:
+	friend Base;
 	std::shared_future<T>   m_shared_state;
 };
 
 template <typename T>
 class future : public BrightFuture<T, future<T>>
 {
-public:
+private:
 	using Base = BrightFuture<T, future<T>>;
+	friend Base;
 
+public:
 	future() = default;
 	future(future&&) noexcept = default;
 	future& operator=(future&&) noexcept = default;
@@ -227,6 +229,9 @@ public:
 	template <typename Func>
 	auto then(Func&& continuation, Executor *host)
 	{
+#if __cplusplus >= 201703L
+		static_assert(std::is_invocable<Func, future&&>::value);
+#endif
 		return Async(std::forward<Func>(continuation), std::move(*this), host);
 	}
 
@@ -242,15 +247,6 @@ public:
 	{
 		assert(Base::valid());
 		return m_shared_state.get();
-	}
-
-	std::future<T>&& InternalFuture()
-	{
-		return std::move(m_shared_state);
-	}
-	const std::future<T>& InternalFuture() const
-	{
-		return m_shared_state;
 	}
 
 private:
@@ -468,15 +464,15 @@ private:
 };
 
 template <typename Func, typename Future>
-auto Async(Func&& continuation, Future&& future, Executor *host)
+auto Async(Func&& function, Future&& fut_arg, Executor *host)
 {
-	assert(future.valid());
+	assert(fut_arg.valid());
 	assert(host);
 
-	auto token_queue = future.m_token;
+	auto token_queue = fut_arg.m_token;
 	assert(token_queue);
 	
-	auto task      = std::make_shared<Task<Future, Func>>(std::forward<Future>(future), std::forward<Func>(continuation));
+	auto task      = std::make_shared<Task<Future, Func>>(std::forward<Future>(fut_arg), std::forward<Func>(function));
 	auto result    = task->GetResult();
 	auto token     = host->Add([task=std::move(task)]{task->Execute();});
 

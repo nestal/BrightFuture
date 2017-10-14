@@ -237,10 +237,10 @@ TEST_CASE("test shared_future::then()", "[normal]")
 			REQUIRE(f.is_ready());
 			run1 = true;
 		}, &exe).wait();
+		REQUIRE(run1);
 	}
 	future_cont.wait();
 
-	REQUIRE(run1);
 	REQUIRE(run2);
 
 	exe.Quit();
