@@ -339,20 +339,6 @@ struct InlineExecutor : ExecutorBase<InlineExecutor>
 	{
 		task();
 	}
-	
-	InlineExecutor()
-	{
-		++m_balance;
-		std::cout << "construct " << m_balance << std::endl;
-	}
-	
-	~InlineExecutor()
-	{
-		--m_balance;
-		std::cout << "destroyed " << m_balance << std::endl;
-	}
-	
-	static std::atomic_int m_balance;
 };
 
 /// \brief Unwrapping constructor for future
@@ -369,6 +355,10 @@ future<T>::future(future<future<T>>&& fut)
 	
 	auto exe = std::make_shared<InlineExecutor>();
 	
+	// It's OK to capture a shared_ptr to InlineExecutor in the callback that is queued to
+	// itself, because the InlineExecutor will not destroy the std::function passed to it
+	// in ExecuteTask(). When the last std::function in the InlineExecutor is destroyed,
+	// the InlineExecutor itself will be freed.
 	fut.then([fwd=std::move(fwd), exe](future<future<T>> fut) mutable
 	{
 		try
