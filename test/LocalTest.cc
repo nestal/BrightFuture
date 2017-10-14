@@ -144,7 +144,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		futures.push_back(async([]{ return 100; }, &exe1));
 		futures.push_back(async([]{ return 101; }, &exe2));
 		
-		result = when_all(futures.begin(), futures.end(), &exe1).then(
+		result = when_all(futures.begin(), futures.end()).then(
 			[](future<std::vector<int>> fints)
 			{
 				REQUIRE(fints.is_ready());
@@ -161,7 +161,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		std::vector<shared_future<int>> futures;
 		futures.push_back(async([]{ return 100; }, &exe1).share());
 		futures.push_back(async([]{ return 101; }, &exe2).share());
-		result = when_all(futures.begin(), futures.end(), &exe1).then(
+		result = when_all(futures.begin(), futures.end()).then(
 			[](future<std::vector<int>> fints)
 			{
 				REQUIRE(fints.is_ready());

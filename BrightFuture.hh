@@ -612,7 +612,13 @@ public:
 		return m_promise.get_future();
 	}
 	
+	auto Executor()
+	{
+		return &m_exec;
+	}
+	
 private:
+	InlineExecutor              m_exec;
 	promise<std::vector<T>>     m_promise;
 	
 	std::mutex                  m_mux;
@@ -621,7 +627,7 @@ private:
 };
 
 template < class InputIt >
-auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Instance())
+auto when_all(InputIt first, InputIt last)
 {
 	using Future = typename std::iterator_traits<InputIt>::value_type;
 	using T      = typename Future::value_type;
@@ -636,7 +642,7 @@ auto when_all(InputIt first, InputIt last, Executor *exe = DefaultExecutor::Inst
 		futures[i].then([intermediate, i](auto&& fut)
 		{
 			intermediate->Process(std::forward<decltype(fut)>(fut), i);
-		}, exe);
+		}, intermediate->Executor());
 	
 	return intermediate->Result();
 }
