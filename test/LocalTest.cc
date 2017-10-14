@@ -356,3 +356,5 @@ TEST_CASE( "unwrap future", "[normal]" )
 	exe.Quit();
 	thread.join();
 }
+
+std::atomic_int InlineExecutor::m_balance;

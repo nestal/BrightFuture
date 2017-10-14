@@ -339,6 +339,20 @@ struct InlineExecutor : ExecutorBase<InlineExecutor>
 	{
 		task();
 	}
+	
+	InlineExecutor()
+	{
+		++m_balance;
+		std::cout << "construct " << m_balance << std::endl;
+	}
+	
+	~InlineExecutor()
+	{
+		--m_balance;
+		std::cout << "destroyed " << m_balance << std::endl;
+	}
+	
+	static std::atomic_int m_balance;
 };
 
 /// \brief Unwrapping constructor for future
