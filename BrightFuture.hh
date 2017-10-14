@@ -268,6 +268,11 @@ public:
 		return future<T>{m_shared_state.get_future(), m_cont};
 	}
 
+	void set_exception( std::exception_ptr p )
+	{
+		m_shared_state.set_exception(p);
+	}
+	
 	template <typename T1=T>
 	typename std::enable_if<!std::is_void<T1>::value>::type set_value(T1&& t)
 	{
@@ -281,6 +286,7 @@ public:
 		m_shared_state.set_value();
 		m_cont->TryContinue();
 	}
+
 private:
 	std::promise<T>     m_shared_state;
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
@@ -350,14 +356,28 @@ public:
 	template <typename R=Ret>
 	typename std::enable_if<!std::is_void<R>::value>::type Execute()
 	{
-		m_return.set_value(m_function(std::move(m_arg)));
+		try
+		{
+			m_return.set_value(m_function(std::move(m_arg)));
+		}
+		catch (...)
+		{
+			m_return.set_exception(std::current_exception());
+		}
 	}
 
 	template <typename R=Ret>
 	typename std::enable_if<std::is_void<R>::value>::type Execute()
 	{
-		m_function(std::move(m_arg));
-		m_return.set_value();
+		try
+		{
+			m_function(std::move(m_arg));
+			m_return.set_value();
+		}
+		catch (...)
+		{
+			m_return.set_exception(std::current_exception());
+		}
 	}
 
 private:

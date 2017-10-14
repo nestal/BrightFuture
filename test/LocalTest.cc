@@ -212,25 +212,61 @@ TEST_CASE("test shared_future::then()", "[normal]")
 	
 	auto fut = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
 	auto copy = fut;
-	
-	auto copy_cont = copy.then([&run1](shared_future<void> f)
-	{
-		REQUIRE(f.is_ready());
-		run1 = true;
-	}, &exe);
 
 	auto future_cont = fut.then([&run2](shared_future<void> f)
 	{
 		REQUIRE(f.is_ready());
 		run2 = true;
 	}, &exe);
-
-	copy_cont.wait();
+	static_assert(std::is_same<decltype(future_cont), future<void>>::value);
+	
+	SECTION("call then() on the same shared_future")
+	{
+		bool run3 = false;
+		fut.then([&run3](shared_future<void> f)
+		{
+			REQUIRE(f.is_ready());
+			run3 = true;
+		}, &exe).wait();
+		REQUIRE(run3);
+	}
+	SECTION("call then() on a copy")
+	{
+		copy.then([&run1](shared_future<void> f)
+		{
+			REQUIRE(f.is_ready());
+			run1 = true;
+		}, &exe).wait();
+	}
 	future_cont.wait();
 
 	REQUIRE(run1);
 	REQUIRE(run2);
 
+	exe.Quit();
+	thread.join();
+}
+
+TEST_CASE("test exception in async", "[normal]")
+{
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
+	
+	bool run1{false}, run2{false};
+	
+	auto fut = async([]{throw -1;}, &exe);
+	SECTION("call then() with a future with an exception")
+	{
+		fut.then([](future<void> fut)
+		{
+			REQUIRE_THROWS_AS(fut.get(), int&);
+		}, &exe);
+	}
+	SECTION("the returned future contains an exception")
+	{
+		REQUIRE_THROWS_AS(fut.get(), int&);
+	}
+	
 	exe.Quit();
 	thread.join();
 }

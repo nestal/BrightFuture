@@ -1,4 +1,4 @@
-# BrightFuture: A Simple Implementation of a then()-able future
+# BrightFuture: A Simple Implementation of a then()-able `future`
 
 In the C++11 specification, a new concurrency library was added to the
 standard library. It provides some convenient APIs like `std::async()`,
@@ -13,10 +13,11 @@ There is only one header file to download: [BrightFuture.hh](BrightFuture.hh).
 As this library is developed as a polyfill for [`std::experimental::future`](http://en.cppreference.com/w/cpp/experimental/future),
 it has the following goals:
 
-*   Using only existing standard C++ concurrency facilities.
-*   Easy to deploy to existing C++ projects.
-*   Small, single header only.
-*   Works with common multi-threaded frameworks like boost::asio and Qt.
+*   Portable:
+	*   Using only existing standard C++ concurrency facilities.
+	*   Works with common multi-threaded frameworks like boost::asio and Qt.
+*   Small:
+	*   Single header only. Easy to deploy to existing C++ projects.
 *   Extensible to any other multi-threaded frameworks.
 *   Use an interfere similar to the upcoming Concurrency TS for easy
 	migration.
