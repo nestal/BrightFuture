@@ -284,8 +284,20 @@ TEST_CASE( "unwrap future", "[normal]" )
 		}, &exe);
 	}, &exe);
 	
-	future<int> f{std::move(ffi), &exe};
-	REQUIRE(f.get() == 100);
+	SECTION("then() on the future<future<T>>")
+	{
+		future<int>{std::move(ffi), &exe}.then(
+			[](future<int> f)
+			{
+				REQUIRE(f.get() == 100);
+			}, &exe
+		).wait();
+	}
+	SECTION("get() and wait() on the future")
+	{
+		future<int> f{std::move(ffi), &exe};
+		REQUIRE(f.get() == 100);
+	}
 	
 	exe.Quit();
 	thread.join();

@@ -35,12 +35,11 @@ public:
 	virtual Token Add(std::function<void()>&& task) = 0;
 	virtual void Schedule(Token token) = 0;
 };
-/**
- * \brief A token to represent a task to be called.
- *
- * It is returned by TaskScheduler::Add() to represent the task being added. Pass the token
- * to TaskScheduler::Schedule() to run that task.
- */
+
+/// \brief A token to represent a task to be called.
+///
+/// It is returned by TaskScheduler::Add() to represent the task being added. Pass the token
+/// to TaskScheduler::Schedule() to run that task.
 struct Token
 {
 	Executor        *host;
@@ -290,28 +289,12 @@ private:
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
-template <typename Func, typename T>
-void SetValueOrException(promise<T>& promise, Func&& func)
-{
-	try
-	{
-		promise.set_value(std::forward<Func>(func)());
-	}
-	catch (...)
-	{
-		promise.set_exception(std::current_exception());
-	}
-}
-
-/**
- * \brief Unwrapping constructor of future.
- *
- * The unwrapping constructor construct a future<T> from a future<future<T>>.
- *
- * \tparam T        Type of the state share of the future
- * \param wrapped
- * \param host
- */
+/// \brief Unwrapping constructor for future
+///
+/// Construct a future<T> from a future<future<T>>, i.e. unwraps the future.
+/// \tparam T   The type of the shared state.
+/// \param fut
+/// \param host
 template <typename T>
 future<T>::future(future<future<T>>&& fut, Executor *host)
 {
