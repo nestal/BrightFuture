@@ -21,8 +21,10 @@ it has the following goals:
 *   Extensible to any other multi-threaded frameworks.
 *   Use an interfere similar to the upcoming Concurrency TS for easy
 	migration.
-*   Can specify exactly which thread (or thread pool) to run a certain
-	async task or continuation routine.
+*   Scalable:
+	*   Does not create threads internally.
+	*   Can specify exactly which thread (or thread pool) to run a certain
+		async task or continuation routine.
 
 # Usage
 

@@ -216,7 +216,7 @@ public:
 	future(const future& future) = delete;
 	future& operator=(const future&) = delete;
 
-	future(future<future<T>>&& wrapped, Executor *host);
+	future(future<future<T>>&& wrapped);
 	
 	future(std::future<T>&& f, TokenQueuePtr token) : Base{std::move(token)}, m_shared_state{std::move(f)}
 	{
@@ -289,41 +289,6 @@ private:
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
-/// \brief Unwrapping constructor for future
-///
-/// Construct a future<T> from a future<future<T>>, i.e. unwraps the future.
-/// \tparam T   The type of the shared state.
-/// \param fut
-/// \param host
-template <typename T>
-future<T>::future(future<future<T>>&& fut, Executor *host)
-{
-	promise<T> fwd;
-	*this = fwd.get_future();
-	
-	fut.then([fwd=std::move(fwd), host](future<future<T>> fut) mutable
-	{
-		try
-		{
-			fut.get().then([fwd=std::move(fwd)](future<T> fut_get) mutable
-			{
-				try
-				{
-					fwd.set_value(fut_get.get());
-				}
-				catch (...)
-				{
-					fwd.set_exception(std::current_exception());
-				}
-			}, host);
-		}
-		catch (...)
-		{
-			fwd.set_exception(std::current_exception());
-		}
-	}, host);
-}
-
 template <typename ConcreteExecutor>
 class ExecutorBase : public Executor
 {
@@ -367,6 +332,53 @@ private:
 	std::unordered_map<std::intptr_t, std::function<void()>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
+
+struct InlineExecutor : ExecutorBase<InlineExecutor>
+{
+	void ExecuteTask(std::function<void()>&& task)
+	{
+		task();
+	}
+};
+
+/// \brief Unwrapping constructor for future
+///
+/// Construct a future<T> from a future<future<T>>, i.e. unwraps the future.
+/// \tparam T   The type of the shared state.
+/// \param fut
+/// \param host
+template <typename T>
+future<T>::future(future<future<T>>&& fut)
+{
+	promise<T> fwd;
+	*this = fwd.get_future();
+	
+	auto exe = std::make_shared<InlineExecutor>();
+	
+	fut.then([fwd=std::move(fwd), exe](future<future<T>> fut) mutable
+	{
+		try
+		{
+			// although we don't need the executor in this lambda, we need to keep it
+			// captured, otherwise the shared_ptr will destroy the executor.
+			fut.get().then([fwd=std::move(fwd), exe](future<T> fut_get) mutable
+			{
+				try
+				{
+					fwd.set_value(fut_get.get());
+				}
+				catch (...)
+				{
+					fwd.set_exception(std::current_exception());
+				}
+			}, exe.get());
+		}
+		catch (...)
+		{
+			fwd.set_exception(std::current_exception());
+		}
+	}, exe.get());
+}
 
 template <typename Future, typename Callable>
 class Task

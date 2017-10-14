@@ -286,7 +286,7 @@ TEST_CASE( "unwrap future", "[normal]" )
 	
 	SECTION("then() on the future<future<T>>")
 	{
-		future<int>{std::move(ffi), &exe}.then(
+		future<int>{std::move(ffi)}.then(
 			[](future<int> f)
 			{
 				REQUIRE(f.get() == 100);
@@ -295,7 +295,7 @@ TEST_CASE( "unwrap future", "[normal]" )
 	}
 	SECTION("get() and wait() on the future")
 	{
-		future<int> f{std::move(ffi), &exe};
+		future<int> f{std::move(ffi)};
 		REQUIRE(f.get() == 100);
 	}
 	
