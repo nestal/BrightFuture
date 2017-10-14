@@ -217,6 +217,8 @@ public:
 	future(const future& future) = delete;
 	future& operator=(const future&) = delete;
 
+	future(future<future<T>>&& wrapped, Executor *host);
+	
 	future(std::future<T>&& f, TokenQueuePtr token) : Base{std::move(token)}, m_shared_state{std::move(f)}
 	{
 	}
@@ -287,6 +289,21 @@ private:
 	std::promise<T>     m_shared_state;
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
+
+template <typename T>
+future<T>::future(future<future<T>>&& wrapped, Executor *host)
+{
+	promise<T> forwarder;
+	*this = forwarder.get_future();
+	
+	wrapped.then([p=std::move(forwarder), host](future<future<T>> fut) mutable
+	{
+		fut.get().then([forwarder=std::move(p)](future<T> self) mutable
+		{
+			forwarder.set_value(self.get());
+		}, host);
+	}, host);
+}
 
 template <typename ConcreteExecutor>
 class ExecutorBase : public Executor

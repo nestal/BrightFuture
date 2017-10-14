@@ -103,7 +103,8 @@ There are a few features missing in BrightFuture that are supported by
 `std::experimental::future`:
 
 *   Unwrapping constructor: i.e. `future<T>::future( future<future<T>&& t)`
-*   Future of references: i.e. `future<T&>`
+	and `when_all()` require an executor.
+*   Future of references: i.e. `future<T&>`.
 
 While it is not impossible to implement these features, doing so will
 compromise the simple design. The library will become much bigger and

@@ -270,3 +270,23 @@ TEST_CASE("test exception in async", "[normal]")
 	exe.Quit();
 	thread.join();
 }
+
+TEST_CASE( "unwrap future", "[normal]" )
+{
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
+
+	auto ffi = async([&exe]
+	{
+		return async([]
+		{
+			return 100;
+		}, &exe);
+	}, &exe);
+	
+	future<int> f{std::move(ffi), &exe};
+	REQUIRE(f.get() == 100);
+	
+	exe.Quit();
+	thread.join();
+}
