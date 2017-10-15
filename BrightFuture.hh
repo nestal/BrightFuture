@@ -380,12 +380,11 @@ struct InlineExecutor : ExecutorBase<InlineExecutor>
 ///
 /// Construct a future<T> from a future<future<T>>, i.e. unwraps the future. This
 /// constructor is useful when returning a future in the continuation routine in
-/// then(). The 
+/// then().
 ///
 /// \tparam T   The type of the shared state.
 /// \param fut  The "wrapped" future to a future to T. After calling this function
 ///             \a fut will be invalid, i.e. fut.valid() will return false.
-/// \param host
 template <typename T>
 future<T>::future(future<future<T>>&& fut)
 {
@@ -471,22 +470,6 @@ private:
 	promise<Ret>    m_return;       //!< Promise to the return value of the function to be called.
 	Callable        m_function;     //!< Function to be called in Execute().
 	Future          m_arg;          //!< Argument to the function to be called in Execute().
-};
-
-class DefaultExecutor : public ExecutorBase<DefaultExecutor>
-{
-public:
-	// Called by ExecutorBase using CRTP
-	void ExecuteTask(std::function<void()>&& task)
-	{
-		std::thread{std::move(task)}.detach();
-	}
-	
-	static DefaultExecutor* Instance()
-	{
-		static DefaultExecutor exe;
-		return &exe;
-	}
 };
 
 class QueueExecutor : public ExecutorBase<QueueExecutor> // CRTP
@@ -613,7 +596,7 @@ public:
 /// \param exe      The executor to invoke the function.
 /// \return         A future to the return value of func().
 template <typename Func>
-auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
+auto async(Func&& func, Executor *exe)
 {
 	// The argument to func is already ready, because there is none.
 	promise<void> arg;
