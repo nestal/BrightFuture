@@ -43,6 +43,8 @@ class Executor;
 class Executor
 {
 public:
+	using Function = std::function<void (Executor*)>;
+	
 	virtual ~Executor() = default;
 	virtual void Execute(std::function<void()>&& task) = 0;
 	virtual Token Add(std::function<void()>&& task) = 0;

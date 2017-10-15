@@ -10,21 +10,23 @@ There is only one header file to download: [BrightFuture.hh](BrightFuture.hh).
 
 # Design Rationale
 
-As this library is developed as a polyfill for [`std::experimental::future`](http://en.cppreference.com/w/cpp/experimental/future),
+As this library is developed as a drop-in replacement for [upcoming Concurrency TS](http://en.cppreference.com/w/cpp/experimental/future),
 it has the following goals:
 
 *   Portable:
 	*   Using only existing standard C++ concurrency facilities.
-	*   Works with common multi-threaded frameworks like boost::asio and Qt.
+	*   Use an interface similar to the upcoming Concurrency TS for easy
+		migration.
 *   Small:
 	*   Single header only. Easy to deploy to existing C++ projects.
-*   Extensible to any other multi-threaded frameworks.
-*   Use an interfere similar to the upcoming Concurrency TS for easy
-	migration.
 *   Scalable:
-	*   Does not create threads internally.
+	*   Does not create threads internally. Will always use the threads
+		created by the user. 
 	*   Can specify exactly which thread (or thread pool) to run a certain
-		async task or continuation routine.
+		asynchronous task or continuation routine.
+*   Extensible to any other multi-threaded frameworks.
+	*   New Executors can be created to customize the needs of other
+		frameworks: e.g. Boost asio and Qt. 
 
 # Usage
 
@@ -43,18 +45,20 @@ int main()
 	auto workers = exe.Spawn(3);
 	
 	// Run a task asynchronously. Returns a future to the result.
-	async([]
+	auto fut = async([]
 	{
 		std::this_thread::sleep_for(2s);
 		return 100;
-	}, &exe).
+	}, &exe);
 	
-	// Attach a continuation routine, which will be run when the
-	// async task is finished. The argument of the continuation
-	// routine is the return value of the async task (i.e. 100).
+	// Attach a continuation routine to the async task above.
+	// It will be run when the async task is finished. The argument
+	// of the continuation routine is the return value of the async
+	// task (i.e. 100).
 	// The continuation routine will be run in the thread specified
-	// by the executor (i.e. sch).
-	then([](future<int> val)
+	// by the executor (i.e. QueueExecutor). It doesn't have to be
+	// the same as the one that runs the asynchronous task.
+	fut.then([](future<int> val)
 	{
 		assert(val.get() == 100);
 		return "abc"s;
