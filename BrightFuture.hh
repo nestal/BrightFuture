@@ -9,6 +9,13 @@
 // Created by nestal on 10/3/17.
 //
 
+/// \file   BrightFuture.hh
+/// \brief  Main header file for BrightFuture
+///
+/// BrightFuture is a header-only library. You only need to include BrightFuture.hh in your
+/// project to use it. There is only one header to include so it is easy to be used in any
+/// projects.
+
 #pragma once
 
 #include <cassert>
@@ -27,6 +34,12 @@ struct Token;
 class TaskBase;
 class Executor;
 
+///
+/// Schedule callbacks and execute them.
+///
+/// The Executor serves two purposes: to schedule callback functions and to execute them.
+/// This is the abstract interface of an Executor. It's to be used with a Token.
+///
 class Executor
 {
 public:
@@ -36,10 +49,12 @@ public:
 	virtual void Schedule(Token token) = 0;
 };
 
-/// \brief A token to represent a task to be called.
+///
+/// A token to represent a task to be called.
 ///
 /// It is returned by TaskScheduler::Add() to represent the task being added. Pass the token
 /// to TaskScheduler::Schedule() to run that task.
+///
 struct Token
 {
 	Executor        *host;
@@ -202,6 +217,23 @@ private:
 	std::shared_future<T>   m_shared_state;
 };
 
+/// Refers to a value that will be available in the future.
+///
+/// A future refers to a value that will be available in the future. It is typically created by async()
+/// which run something in another thread. Since the value in question would be created by running
+/// some code in a separate thread, it is called the _shared state_ of the future.
+///
+/// A future is said to be _valid_ if it refers to a shared state. For example, default constructed
+/// futures are invalid, because it doesn't refer to a shared state. Future returned by async() will
+/// always be valid. After the shared state is ready, accessing the shared state will also invalidate
+/// the future. In other words, futures are supposed to be used once. If you want to use it multiple
+/// times, convert it into a shared_future.
+///
+/// The future class provides functions to access to the stared state. In C++11, you can call get()
+/// to retrieve the shared state. As mentioned above, the future will be invalid after you call get().
+/// BrightFuture::future supports then(), in addition to all other features supported by C++11 futures.
+///
+/// \tparam T   The type of the future value.
 template <typename T>
 class future : public BrightFuture<T, future<T>>
 {
@@ -222,6 +254,9 @@ public:
 	{
 	}
 
+	/// Convert a future to a shared_future.
+	///
+	///
 	auto share()
 	{
 		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token)};
@@ -335,7 +370,7 @@ private:
 
 struct InlineExecutor : ExecutorBase<InlineExecutor>
 {
-	void ExecuteTask(std::function<void()>&& task)
+	void ExecuteTask(const std::function<void()>& task)
 	{
 		task();
 	}
@@ -343,9 +378,13 @@ struct InlineExecutor : ExecutorBase<InlineExecutor>
 
 /// \brief Unwrapping constructor for future
 ///
-/// Construct a future<T> from a future<future<T>>, i.e. unwraps the future.
+/// Construct a future<T> from a future<future<T>>, i.e. unwraps the future. This
+/// constructor is useful when returning a future in the continuation routine in
+/// then(). The 
+///
 /// \tparam T   The type of the shared state.
-/// \param fut
+/// \param fut  The "wrapped" future to a future to T. After calling this function
+///             \a fut will be invalid, i.e. fut.valid() will return false.
 /// \param host
 template <typename T>
 future<T>::future(future<future<T>>&& fut)
@@ -363,7 +402,7 @@ future<T>::future(future<future<T>>&& fut)
 	{
 		try
 		{
-			// although we don't need the executor in this lambda, we need to keep it
+			// Although we don't need the executor in this lambda, we need to keep it
 			// captured, otherwise the shared_ptr will destroy the executor.
 			fut.get().then([fwd=std::move(fwd), exe](future<T> fut_get) mutable
 			{
@@ -565,6 +604,14 @@ public:
 	}
 };
 
+/// Invoke a function in an executor and get a future to the result.
+///
+///
+/// \tparam Func    The type of the function object. Must be a _Callable_ object (i.e.
+///                 supports operator(void)).
+/// \param func     The function object. func() will be invoked in the Executor \a exe.
+/// \param exe      The executor to invoke the function.
+/// \return         A future to the return value of func().
 template <typename Func>
 auto async(Func&& func, Executor *exe = DefaultExecutor::Instance())
 {
