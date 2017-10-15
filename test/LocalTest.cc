@@ -356,3 +356,39 @@ TEST_CASE( "unwrap future", "[normal]" )
 	exe.Quit();
 	thread.join();
 }
+
+TEST_CASE("then() without specifying an executor")
+{
+	using namespace std::chrono_literals;
+	
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
+	auto tid = thread.get_id();
+
+	std::promise<void> ready;
+	bool is_ready = false;
+	
+	auto fi = async([&exe, wait_for_ready=ready.get_future(), &is_ready]() mutable
+	{
+		// wait until we attach a continuation before proceeding
+		wait_for_ready.get();
+		REQUIRE(is_ready);
+	}, &exe);
+	
+	bool run = false;
+	
+	// If we don't specify an executor, the continuation routine will be run in the same
+	// executor as the async task that produce the future.
+	auto then_fut = fi.then([tid, &run](future<void>)
+	{
+		REQUIRE(std::this_thread::get_id() == tid);
+		run = true;
+	});
+	
+	is_ready = true;
+	ready.set_value();
+	
+	then_fut.wait();
+	exe.Quit();
+	thread.join();
+}

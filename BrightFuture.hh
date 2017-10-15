@@ -43,8 +43,6 @@ class Executor;
 class Executor
 {
 public:
-	using Function = std::function<void (Executor*)>;
-	
 	virtual ~Executor() = default;
 	virtual void Execute(std::function<void()>&& task) = 0;
 	virtual Token Add(std::function<void()>&& task) = 0;
@@ -192,7 +190,7 @@ public:
 	}
 
 	template <typename Func>
-	auto then(Func&& continuation, Executor *host)
+	auto then(Func&& continuation, Executor *host = nullptr)
 	{
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, shared_future&&>::value);
@@ -265,7 +263,7 @@ public:
 	}
 
 	template <typename Func>
-	auto then(Func&& continuation, Executor *host)
+	auto then(Func&& continuation, Executor *host = nullptr)
 	{
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, future&&>::value);
@@ -375,6 +373,17 @@ struct InlineExecutor : ExecutorBase<InlineExecutor>
 	void ExecuteTask(const std::function<void()>& task)
 	{
 		task();
+	}
+	
+	static auto Alternative(Executor *& exec)
+	{
+		std::shared_ptr<InlineExecutor> replacement;
+		if (!exec)
+		{
+			replacement = std::make_shared<InlineExecutor>();
+			exec = replacement.get();
+		}
+		return replacement;
 	}
 };
 
@@ -543,6 +552,11 @@ template <typename Func, typename Future>
 auto Async(Func&& function, Future&& fut_arg, Executor *host)
 {
 	assert(fut_arg.valid());
+	
+	// If host is null, create an InlineExecutor as an alternative.
+	// We need to capture that InlineExecutor in the task function that will be Add()'ed,
+	// because we need to keep the executor alive until the task function has returned.
+	auto alt = InlineExecutor::Alternative(host);
 	assert(host);
 
 	auto token_queue = fut_arg.m_token;
@@ -550,7 +564,7 @@ auto Async(Func&& function, Future&& fut_arg, Executor *host)
 	
 	auto task      = std::make_shared<Task<Future, Func>>(std::forward<Future>(fut_arg), std::forward<Func>(function));
 	auto result    = task->GetResult();
-	auto token     = host->Add([task=std::move(task)]{task->Execute();});
+	auto token     = host->Add([task=std::move(task), alt]{task->Execute();});
 
 	// There is a race condition here: whether or not the last async call has finished or not.
 
