@@ -368,6 +368,16 @@ private:
 	std::intptr_t m_seq{0};
 };
 
+///
+/// A temporary executor that runs tasks directly in the same thread that schedule them.
+///
+/// It is a tricky executor: it is designed to be used temporarily when no other executor
+/// are available, e.g. when the executor passed to then() is null. Using InlineExecutor
+/// basically means that:
+/// - If the previous async task is not finished, attach the current function to the same
+///   thread as the previous async task.
+/// - If the previous async task has been finished, then run the current function immediately.
+///
 struct InlineExecutor : ExecutorBase<InlineExecutor>
 {
 	void ExecuteTask(const std::function<void()>& task)
