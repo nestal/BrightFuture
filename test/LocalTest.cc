@@ -272,7 +272,9 @@ TEST_CASE("test shared_future::then()", "[normal]")
 		REQUIRE(f.is_ready());
 		run2 = true;
 	}, &exe);
+#ifndef _MSC_VER
 	static_assert(std::is_same<decltype(future_cont), future<void>>::value);
+#endif
 	
 	SECTION("call then() on the same shared_future")
 	{
