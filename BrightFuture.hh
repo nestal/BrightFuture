@@ -108,22 +108,22 @@ private:
 using TokenQueuePtr = std::shared_ptr<TokenQueue>;
 
 template <typename T, typename Inherited>
-class BrightFuture
+class FutureBase
 {
 public:
 	using value_type = T;
 
 private:
-	BrightFuture() = default;
-	BrightFuture(BrightFuture&&) noexcept = default;
-	BrightFuture(const BrightFuture&) = default;
-	BrightFuture& operator=(BrightFuture&&) noexcept = default;
-	BrightFuture& operator=(const BrightFuture&) noexcept = default;
+	FutureBase() = default;
+	FutureBase(FutureBase&&) noexcept = default;
+	FutureBase(const FutureBase&) = default;
+	FutureBase& operator=(FutureBase&&) noexcept = default;
+	FutureBase& operator=(const FutureBase&) noexcept = default;
 
-	explicit BrightFuture(TokenQueuePtr token) noexcept : m_token{std::move(token)}
+	explicit FutureBase(TokenQueuePtr token) noexcept : m_token{std::move(token)}
 	{
 	}
-	~BrightFuture() = default;
+	~FutureBase() = default;
 
 	// Only allow Inherited class to construct
 	friend Inherited;
@@ -170,10 +170,10 @@ private:
 };
 
 template <typename T>
-class shared_future : public BrightFuture<T, shared_future<T>>
+class shared_future : public FutureBase<T, shared_future<T>>
 {
 private:
-	using Base = BrightFuture<T, shared_future<T>>;
+	using Base = FutureBase<T, shared_future<T>>;
 	friend Base;
 
 public:
@@ -235,10 +235,10 @@ private:
 ///
 /// \tparam T   The type of the future value.
 template <typename T>
-class future : public BrightFuture<T, future<T>>
+class future : public FutureBase<T, future<T>>
 {
 private:
-	using Base = BrightFuture<T, future<T>>;
+	using Base = FutureBase<T, future<T>>;
 	friend Base;
 
 public:
