@@ -39,8 +39,9 @@ TEST_CASE("then() without specifying an executor")
 	
 	// If we don't specify an executor, the continuation routine will be run in the same
 	// executor as the async task that produce the future.
-	auto then_fut = fi.then([tid, &run](auto)
+	auto then_fut = fi.then([tid, &run, exe](auto fut)
 	{
+		REQUIRE(fut.ExecutorToUse() == exe);
 		REQUIRE(std::this_thread::get_id() == tid);
 		run = true;
 	});
@@ -62,14 +63,12 @@ TEST_CASE( "Inline executor", "[normal]")
 	SECTION("run in the same thread")
 	{
 		auto tid = std::this_thread::get_id();
-		auto fut = async(
-			[tid, &run]
-			{
-				REQUIRE(std::this_thread::get_id() == tid);
-				run = true;
-				return 100;
-			}, subject.get()
-		);
+		auto fut = async([tid, &run]
+		{
+			REQUIRE(std::this_thread::get_id() == tid);
+			run = true;
+			return 100;
+		}, subject.get());
 		
 		// no need to wait() because everything are in this thread
 		
@@ -124,14 +123,16 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 		return 100;
 	}, exe.get());
 	
-	fut.then([tids](future<int> val)
+	fut.then([tids, exe](future<int> val)
 	{
+		REQUIRE(val.ExecutorToUse() == exe);
 		REQUIRE(val.is_ready());
 		REQUIRE(val.get() == 100);
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		return std::string{"abc"};
-	}).then([tids](future<std::string> s)
+	}).then([tids, exe](future<std::string> s)
 	{
+		REQUIRE(s.ExecutorToUse() == exe);
 		REQUIRE(s.is_ready());
 		REQUIRE(s.get() == "abc");
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
