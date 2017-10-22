@@ -31,8 +31,13 @@
 namespace BrightFuture {
 
 struct Token;
-class TaskBase;
 class Executor;
+
+class TaskBase
+{
+public:
+	virtual void Execute() = 0;
+};
 
 ///
 /// Schedule callbacks and execute them.
@@ -44,8 +49,8 @@ class Executor
 {
 public:
 	virtual ~Executor() = default;
-	virtual void Execute(std::function<void()>&& task) = 0;
-	virtual Token Add(std::function<void()>&& task) = 0;
+	virtual void Execute(std::shared_ptr<TaskBase>&& task) = 0;
+	virtual Token Add(std::shared_ptr<TaskBase>&& task) = 0;
 	virtual void Schedule(Token token) = 0;
 };
 
@@ -330,7 +335,7 @@ class ExecutorBase : public Executor
 public:
 	ExecutorBase() = default;
 
-	Token Add(std::function<void()>&& task) override
+	Token Add(std::shared_ptr<TaskBase>&& task) override
 	{
 		std::unique_lock<std::mutex> lock{m_mutex};
 		auto event = m_seq++;
@@ -340,7 +345,7 @@ public:
 
 	void Schedule(Token token) override
 	{
-		std::function<void()> task;
+		std::shared_ptr<TaskBase> task;
 		{
 			std::unique_lock<std::mutex> lock{m_mutex};
 			auto it = m_tasks.find(token.event);
@@ -356,15 +361,15 @@ public:
 			Execute(std::move(task));
 	}
 
-	void Execute(std::function<void()>&& task) override
+	void Execute(std::shared_ptr<TaskBase>&& task) override
 	{
 		// Use CRTP to call ConcreteExecutor::Execute().
-		static_cast<ConcreteExecutor*>(this)->ExecuteTask(std::move(task));
+		static_cast<ConcreteExecutor*>(this)->Post(std::move(task));
 	}
 
 private:
 	std::mutex  m_mutex;
-	std::unordered_map<std::intptr_t, std::function<void()>>    m_tasks;
+	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
 	std::intptr_t m_seq{0};
 };
 
@@ -380,9 +385,9 @@ private:
 ///
 struct InlineExecutor : ExecutorBase<InlineExecutor>
 {
-	void ExecuteTask(const std::function<void()>& task)
+	void Post(std::shared_ptr<TaskBase>&& task)
 	{
-		task();
+		task->Execute();
 	}
 	
 	static auto Alternative(Executor *& exec)
@@ -444,14 +449,15 @@ future<T>::future(future<future<T>>&& fut)
 }
 
 template <typename Future, typename Callable>
-class Task
+class Task : public TaskBase
 {
 public:
 	//! Return value of "Callable". It may be void.
 	using Ret = typename std::result_of<Callable(Future&&)>::type;
 
 public:
-	Task(Future&& arg, Callable&& func) : m_function{std::forward<Callable>(func)}, m_arg{std::forward<Future>(arg)}
+	Task(Future&& arg, Callable&& func, std::shared_ptr<Executor>&& exe = {}) :
+		m_exec{std::move(exe)}, m_function{std::forward<Callable>(func)}, m_arg{std::forward<Future>(arg)}
 	{
 	}
 
@@ -460,8 +466,13 @@ public:
 		return m_return.get_future();
 	}
 
+	void Execute() override
+	{
+		Run();
+	}
+	
 	template <typename R=Ret>
-	typename std::enable_if<!std::is_void<R>::value>::type Execute()
+	typename std::enable_if<!std::is_void<R>::value, void>::type Run()
 	{
 		try
 		{
@@ -474,7 +485,7 @@ public:
 	}
 
 	template <typename R=Ret>
-	typename std::enable_if<std::is_void<R>::value>::type Execute()
+	typename std::enable_if<std::is_void<R>::value, void>::type Run()
 	{
 		try
 		{
@@ -488,6 +499,9 @@ public:
 	}
 
 private:
+	std::shared_ptr<Executor>   m_exec; //!< Only valid if a shared-ownership executor. This is just to make
+										//!< sure the executor's lifetime exeed the task.
+	
 	promise<Ret>    m_return;       //!< Promise to the return value of the function to be called.
 	Callable        m_function;     //!< Function to be called in Execute().
 	Future          m_arg;          //!< Argument to the function to be called in Execute().
@@ -504,7 +518,7 @@ public:
 		// each function in the queue after releasing the lock.
 		// This design optimizes throughput and minimize contention, but scarifies latency
 		// and concurrency.
-		std::deque<std::function<void()>> queue;
+		std::deque<std::shared_ptr<TaskBase>> queue;
 		{
 			std::unique_lock<std::mutex> lock{m_mux};
 			m_cond.wait(lock, [this] { return !m_queue.empty() || m_quit; });
@@ -512,8 +526,8 @@ public:
 		}
 		
 		// Execute the function after releasing the lock to reduce contention
-		for (auto&& func : queue)
-			func();
+		for (auto&& task : queue)
+			task->Execute();
 		
 		m_count += queue.size();
 		return queue.size();
@@ -543,7 +557,7 @@ public:
 	}
 	
 	// Called by ExecutorBase using CRTP
-	void ExecuteTask(std::function<void()>&& task)
+	void Post(std::shared_ptr<TaskBase>&& task)
 	{
 		std::unique_lock<std::mutex> lock{m_mux};
 		m_queue.push_back(std::move(task));
@@ -551,11 +565,11 @@ public:
 	}
 	
 private:
-	std::mutex                          m_mux;
-	std::condition_variable             m_cond;
-	std::deque<std::function<void()>>   m_queue;
-	std::atomic<bool>                   m_quit{false};
-	std::atomic<decltype(m_queue.size())> m_count{0};
+	std::mutex                              m_mux;
+	std::condition_variable                 m_cond;
+	std::deque<std::shared_ptr<TaskBase>>   m_queue;
+	std::atomic<bool>                       m_quit{false};
+	std::atomic<std::size_t>                m_count{0};
 };
 
 template <typename Func, typename Future>
@@ -563,18 +577,21 @@ auto Async(Func&& function, Future&& fut_arg, Executor *host)
 {
 	assert(fut_arg.valid());
 	
-	// If host is null, create an InlineExecutor as an alternative.
-	// We need to capture that InlineExecutor in the task function that will be Add()'ed,
-	// because we need to keep the executor alive until the task function has returned.
-	auto alt = InlineExecutor::Alternative(host);
-	assert(host);
-
 	auto token_queue = fut_arg.m_token;
 	assert(token_queue);
 	
-	auto task      = std::make_shared<Task<Future, Func>>(std::forward<Future>(fut_arg), std::forward<Func>(function));
+	// If host is null, create an InlineExecutor as an alternative.
+	// We need to capture that InlineExecutor in the task function that will be Add()'ed,
+	// because we need to keep the executor alive until the task function has returned.
+	auto task      = std::make_shared<Task<Future, Func>>(
+		std::forward<Future>(fut_arg),
+		std::forward<Func>(function),
+		InlineExecutor::Alternative(host)
+	);
+	assert(host);
+	
 	auto result    = task->GetResult();
-	auto token     = host->Add([task=std::move(task), alt]{task->Execute();});
+	auto token     = host->Add(std::move(task));
 
 	// There is a race condition here: whether or not the last async call has finished or not.
 
