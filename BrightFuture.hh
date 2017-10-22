@@ -435,19 +435,17 @@ future<T>::future(future<future<T>>&& fut)
 	promise<T> fwd{fut.ExecutorToUse()->shared_from_this()};
 	*this = fwd.get_future();
 	
-	auto exe = InlineExecutor::New();
-	
 	// It's OK to capture a shared_ptr to InlineExecutor in the callback that is queued to
 	// itself, because the InlineExecutor will not destroy the std::function passed to it
 	// in ExecuteTask(). When the last std::function in the InlineExecutor is destroyed,
 	// the InlineExecutor itself will be freed.
-	fut.then([fwd=std::move(fwd), exe](future<future<T>> fut) mutable
+	fut.then([fwd=std::move(fwd)](future<future<T>> fut) mutable
 	{
 		try
 		{
 			// Although we don't need the executor in this lambda, we need to keep it
 			// captured, otherwise the shared_ptr will destroy the executor.
-			fut.get().then([fwd=std::move(fwd), exe](future<T> fut_get) mutable
+			fut.get().then([fwd=std::move(fwd)](future<T> fut_get) mutable
 			{
 				try
 				{
@@ -457,13 +455,13 @@ future<T>::future(future<future<T>>&& fut)
 				{
 					fwd.set_exception(std::current_exception());
 				}
-			}, exe.get());
+			});
 		}
 		catch (...)
 		{
 			fwd.set_exception(std::current_exception());
 		}
-	}, exe.get());
+	});
 }
 
 template <typename Future, typename Callable>
@@ -557,6 +555,7 @@ public:
 	
 	void Quit()
 	{
+		std::unique_lock<std::mutex> lock{m_mux};
 		m_quit = true;
 		m_cond.notify_all();
 	}
@@ -707,13 +706,7 @@ public:
 		return m_promise.get_future();
 	}
 	
-	auto Executor()
-	{
-		return m_exec.get();
-	}
-	
 private:
-	std::shared_ptr<InlineExecutor>             m_exec{InlineExecutor::New()};
 	promise<std::vector<T>>     m_promise;
 	
 	std::mutex                  m_mux;
@@ -737,7 +730,7 @@ auto when_all(InputIt first, InputIt last)
 		futures[i].then([intermediate, i](auto&& fut)
 		{
 			intermediate->Process(std::forward<decltype(fut)>(fut), i);
-		}, intermediate->Executor());
+		});
 	
 	return intermediate->Result();
 }
