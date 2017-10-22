@@ -14,9 +14,7 @@
 
 namespace BrightFuture {
 
-class QtGuiExecutor :
-	public ExecutorBase<QtGuiExecutor>,
-	public std::enable_shared_from_this<QtGuiExecutor>
+class QtGuiExecutor : public ExecutorBase<QtGuiExecutor>
 {
 private:
 	template <typename Func>
