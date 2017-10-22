@@ -24,10 +24,9 @@ public:
 	{
 	}
 	
-	template <typename Func>
-	void ExecuteTask(Func&& task)
+	void Post(TaskPointer&& task)
 	{
-		m_ios.post(std::forward<Func>(task));
+		m_ios.post([task=std::move(task)]{task->Execute();});
 	}
 
 private:

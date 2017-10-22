@@ -47,16 +47,15 @@ using TaskPointer = std::shared_ptr<TaskBase>;
 /// The Executor serves two purposes: to schedule callback functions and to execute them.
 /// This is the abstract interface of an Executor. It's to be used with a Token.
 ///
-class Executor
+class Executor : virtual public std::enable_shared_from_this<Executor>
 {
 public:
 	virtual ~Executor() = default;
 	virtual void Execute(TaskPointer&& task) = 0;
 	virtual Token Add(TaskPointer&& task) = 0;
 	virtual void Schedule(Token token) = 0;
-	virtual std::shared_ptr<Executor> ShareFromThis() {return {};}
-	virtual std::shared_ptr<const Executor> ShareFromThis() const {return {};}
 };
+using ExecutorPointer = std::shared_ptr<Executor>;
 
 ///
 /// A token to represent a task to be called.
@@ -129,8 +128,12 @@ private:
 	FutureBase& operator=(FutureBase&&) noexcept = default;
 	FutureBase& operator=(const FutureBase&) noexcept = default;
 
-	explicit FutureBase(TokenQueuePtr token) noexcept : m_token{std::move(token)}
+	explicit FutureBase(TokenQueuePtr token, ExecutorPointer&& exe) noexcept :
+		m_token{std::move(token)},
+		m_exec{std::move(exe)}
 	{
+		assert(m_token);
+		assert(m_exec);
 	}
 	~FutureBase() = default;
 
@@ -171,11 +174,17 @@ public:
 	template <typename Func, typename Future>
 	friend auto Async(Func&& function, Future&& fut_arg, Executor *host);
 
+	ExecutorPointer ExecutorToUse(Executor *exec = nullptr) const
+	{
+		return exec ? exec->shared_from_this() : m_exec;
+	}
+	
 private:
 	auto& SharedState() {return static_cast<Inherited*>(this)->m_shared_state;}
 	const auto& SharedState() const {return static_cast<const Inherited*>(this)->m_shared_state;}
 
-	TokenQueuePtr       m_token{std::make_shared<TokenQueue>()};
+	TokenQueuePtr   m_token{std::make_shared<TokenQueue>()};
+	ExecutorPointer m_exec; //!< Default executor. If no executor is specified in then(), use m_executor.
 };
 
 template <typename T>
@@ -194,7 +203,8 @@ public:
 	{
 	}
 
-	shared_future(const std::shared_future<T>& sf, TokenQueuePtr token) : Base{std::move(token)}, m_shared_state{sf}
+	shared_future(const std::shared_future<T>& sf, TokenQueuePtr token, ExecutorPointer exec) :
+		Base{std::move(token), std::move(exec)}, m_shared_state{sf}
 	{
 	}
 
@@ -204,7 +214,7 @@ public:
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, shared_future&&>::value);
 #endif
-		return Async(std::forward<Func>(continuation), shared_future{*this}, host);
+		return Async(std::forward<Func>(continuation), shared_future{*this}, host ? host : Base::m_exec.get());
 	}
 
 	template <typename R=T>
@@ -259,7 +269,8 @@ public:
 
 	future(future<future<T>>&& wrapped);
 	
-	future(std::future<T>&& f, TokenQueuePtr token) : Base{std::move(token)}, m_shared_state{std::move(f)}
+	future(std::future<T>&& f, TokenQueuePtr token, ExecutorPointer exec) :
+		Base{std::move(token), std::move(exec)}, m_shared_state{std::move(f)}
 	{
 	}
 
@@ -268,7 +279,7 @@ public:
 	///
 	auto share()
 	{
-		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token)};
+		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token), std::move(Base::m_exec)};
 	}
 
 	template <typename Func>
@@ -277,7 +288,7 @@ public:
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, future&&>::value);
 #endif
-		return Async(std::forward<Func>(continuation), std::move(*this), host);
+		return Async(std::forward<Func>(continuation), std::move(*this), host ? host : Base::m_exec.get());
 	}
 
 	template <typename R=T>
@@ -296,41 +307,6 @@ public:
 
 private:
 	std::future<T> m_shared_state;
-};
-
-template <typename T>
-class promise
-{
-public:
-	promise() = default;
-
-	auto get_future()
-	{
-		return future<T>{m_shared_state.get_future(), m_cont};
-	}
-
-	void set_exception( std::exception_ptr p )
-	{
-		m_shared_state.set_exception(p);
-	}
-	
-	template <typename T1=T>
-	typename std::enable_if<!std::is_void<T1>::value>::type set_value(T1&& t)
-	{
-		m_shared_state.set_value(std::move(t));
-		m_cont->TryContinue();
-	}
-
-	template <typename T1=T>
-	typename std::enable_if<std::is_void<T1>::value>::type set_value()
-	{
-		m_shared_state.set_value();
-		m_cont->TryContinue();
-	}
-
-private:
-	std::promise<T>     m_shared_state;
-	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
 };
 
 template <typename ConcreteExecutor>
@@ -387,7 +363,7 @@ private:
 ///   thread as the previous async task.
 /// - If the previous async task has been finished, then run the current function immediately.
 ///
-class InlineExecutor : public ExecutorBase<InlineExecutor>, public std::enable_shared_from_this<InlineExecutor>
+class InlineExecutor : public ExecutorBase<InlineExecutor>
 {
 private:
 	InlineExecutor() = default;
@@ -401,27 +377,47 @@ public:
 	{
 		task->Execute();
 	}
-	
-	std::shared_ptr<Executor> ShareFromThis() override
+};
+
+template <typename T>
+class promise
+{
+public:
+	promise() = default;
+	explicit promise(ExecutorPointer&& exec) : m_exec{std::move(exec)}
 	{
-		return shared_from_this();
+		assert(m_exec);
+	}
+
+	auto get_future()
+	{
+		assert(m_exec);
+		return future<T>{m_shared_state.get_future(), m_cont, m_exec};
+	}
+
+	void set_exception( std::exception_ptr p )
+	{
+		m_shared_state.set_exception(p);
 	}
 	
-	std::shared_ptr<const Executor> ShareFromThis() const override
+	template <typename T1=T>
+	typename std::enable_if<!std::is_void<T1>::value>::type set_value(T1&& t)
 	{
-		return shared_from_this();
+		m_shared_state.set_value(std::move(t));
+		m_cont->TryContinue();
 	}
-	
-	static auto Alternative(Executor *& exec)
+
+	template <typename T1=T>
+	typename std::enable_if<std::is_void<T1>::value>::type set_value()
 	{
-		auto replacement = (exec ? exec->ShareFromThis() : std::shared_ptr<Executor>{});
-		if (!exec && !replacement)
-		{
-			replacement = New();
-			exec = replacement.get();
-		}
-		return replacement;
+		m_shared_state.set_value();
+		m_cont->TryContinue();
 	}
+
+private:
+	std::promise<T>     m_shared_state;
+	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
+	ExecutorPointer     m_exec{InlineExecutor::New()};
 };
 
 /// \brief Unwrapping constructor for future
@@ -436,7 +432,7 @@ public:
 template <typename T>
 future<T>::future(future<future<T>>&& fut)
 {
-	promise<T> fwd;
+	promise<T> fwd{fut.ExecutorToUse()->shared_from_this()};
 	*this = fwd.get_future();
 	
 	auto exe = InlineExecutor::New();
@@ -478,8 +474,10 @@ public:
 	using Ret = typename std::result_of<Callable(Future&&)>::type;
 
 public:
-	Task(Future&& arg, Callable&& func, std::shared_ptr<Executor>&& exe) :
-		m_exec{std::move(exe)}, m_function{std::forward<Callable>(func)}, m_arg{std::forward<Future>(arg)}
+	Task(Future&& arg, Callable&& func, Executor *exe) :
+		m_return{arg.ExecutorToUse(exe)},
+		m_function{std::forward<Callable>(func)},
+		m_arg{std::forward<Future>(arg)}
 	{
 	}
 
@@ -521,18 +519,20 @@ public:
 	}
 
 private:
-	std::shared_ptr<Executor>   m_exec; //!< Only valid if a shared-ownership executor. This is just to make
-										//!< sure the executor's lifetime exeed the task.
-	
 	promise<Ret>    m_return;       //!< Promise to the return value of the function to be called.
 	Callable        m_function;     //!< Function to be called in Execute().
 	Future          m_arg;          //!< Argument to the function to be called in Execute().
 };
 
-class QueueExecutor : public ExecutorBase<QueueExecutor> // CRTP
+class QueueExecutor : public ExecutorBase<QueueExecutor>
 {
-public:
+private:
 	QueueExecutor() = default;
+	struct Private {};
+	
+public:
+	explicit QueueExecutor(Private) : QueueExecutor{} {}
+	static auto New() { return std::make_shared<QueueExecutor>(Private{});}
 	
 	auto Run()
 	{
@@ -595,25 +595,19 @@ private:
 };
 
 template <typename Func, typename Future>
-auto Async(Func&& function, Future&& fut_arg, Executor *host)
+auto Async(Func&& function, Future&& arg, Executor *host)
 {
-	assert(fut_arg.valid());
+	assert(arg.valid());
 	
-	auto token_queue = fut_arg.m_token;
+	auto token_queue = arg.m_token;
 	assert(token_queue);
 	
 	// If host is null, create an InlineExecutor as an alternative.
 	// We need to capture that InlineExecutor in the task function that will be Add()'ed,
 	// because we need to keep the executor alive until the task function has returned.
-	auto task      = std::make_shared<Task<Future, Func>>(
-		std::forward<Future>(fut_arg),
-		std::forward<Func>(function),
-		InlineExecutor::Alternative(host)
-	);
-	assert(host);
-	
-	auto result    = task->GetResult();
-	auto token     = host->Add(std::move(task));
+	auto task   = std::make_shared<Task<Future, Func>>(std::forward<Future>(arg), std::forward<Func>(function), host);
+	auto result = task->GetResult();
+	auto token  = host->Add(std::move(task));
 
 	// There is a race condition here: whether or not the last async call has finished or not.
 
@@ -663,8 +657,10 @@ public:
 template <typename Func>
 auto async(Func&& func, Executor *exe)
 {
+	assert(exe);
+	
 	// The argument to func is already ready, because there is none.
-	promise<void> arg;
+	promise<void> arg{exe->shared_from_this()};
 	arg.set_value();
 
 	return Async(AdaptToUnary<Func>{nullptr, std::forward<Func>(func)}, arg.get_future(), exe);
