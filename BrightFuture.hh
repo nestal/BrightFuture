@@ -36,8 +36,10 @@ class Executor;
 class TaskBase
 {
 public:
+	virtual ~TaskBase() = default;
 	virtual void Execute() = 0;
 };
+using TaskPointer = std::shared_ptr<TaskBase>;
 
 ///
 /// Schedule callbacks and execute them.
@@ -49,8 +51,8 @@ class Executor
 {
 public:
 	virtual ~Executor() = default;
-	virtual void Execute(std::shared_ptr<TaskBase>&& task) = 0;
-	virtual Token Add(std::shared_ptr<TaskBase>&& task) = 0;
+	virtual void Execute(TaskPointer&& task) = 0;
+	virtual Token Add(TaskPointer&& task) = 0;
 	virtual void Schedule(Token token) = 0;
 	virtual std::shared_ptr<Executor> ShareFromThis() {return {};}
 	virtual std::shared_ptr<const Executor> ShareFromThis() const {return {};}
@@ -337,7 +339,7 @@ class ExecutorBase : public Executor
 public:
 	ExecutorBase() = default;
 
-	Token Add(std::shared_ptr<TaskBase>&& task) override
+	Token Add(TaskPointer&& task) override
 	{
 		std::unique_lock<std::mutex> lock{m_mutex};
 		auto event = m_seq++;
@@ -347,7 +349,7 @@ public:
 
 	void Schedule(Token token) override
 	{
-		std::shared_ptr<TaskBase> task;
+		TaskPointer task;
 		{
 			std::unique_lock<std::mutex> lock{m_mutex};
 			auto it = m_tasks.find(token.event);
@@ -363,7 +365,7 @@ public:
 			Execute(std::move(task));
 	}
 
-	void Execute(std::shared_ptr<TaskBase>&& task) override
+	void Execute(TaskPointer&& task) override
 	{
 		// Use CRTP to call ConcreteExecutor::Execute().
 		static_cast<ConcreteExecutor*>(this)->Post(std::move(task));
@@ -371,7 +373,7 @@ public:
 
 private:
 	std::mutex  m_mutex;
-	std::unordered_map<std::intptr_t, std::shared_ptr<TaskBase>>    m_tasks;
+	std::unordered_map<std::intptr_t, TaskPointer>    m_tasks;
 	std::intptr_t m_seq{0};
 };
 
@@ -389,11 +391,13 @@ class InlineExecutor : public ExecutorBase<InlineExecutor>, public std::enable_s
 {
 private:
 	InlineExecutor() = default;
+	struct Private {};
 	
 public:
-	static auto New() { return std::shared_ptr<InlineExecutor>(new InlineExecutor);}
+	explicit InlineExecutor(Private) : InlineExecutor{} {}
+	static auto New() { return std::make_shared<InlineExecutor>(Private{});}
 	
-	void Post(std::shared_ptr<TaskBase>&& task)
+	void Post(TaskPointer&& task)
 	{
 		task->Execute();
 	}
@@ -410,7 +414,7 @@ public:
 	
 	static auto Alternative(Executor *& exec)
 	{
-		auto replacement{exec ? exec->ShareFromThis() : std::shared_ptr<Executor>{}};
+		auto replacement = (exec ? exec->ShareFromThis() : std::shared_ptr<Executor>{});
 		if (!exec && !replacement)
 		{
 			replacement = New();
@@ -474,7 +478,7 @@ public:
 	using Ret = typename std::result_of<Callable(Future&&)>::type;
 
 public:
-	Task(Future&& arg, Callable&& func, std::shared_ptr<Executor>&& exe = {}) :
+	Task(Future&& arg, Callable&& func, std::shared_ptr<Executor>&& exe) :
 		m_exec{std::move(exe)}, m_function{std::forward<Callable>(func)}, m_arg{std::forward<Future>(arg)}
 	{
 	}
@@ -536,7 +540,7 @@ public:
 		// each function in the queue after releasing the lock.
 		// This design optimizes throughput and minimize contention, but scarifies latency
 		// and concurrency.
-		std::deque<std::shared_ptr<TaskBase>> queue;
+		std::deque<TaskPointer> queue;
 		{
 			std::unique_lock<std::mutex> lock{m_mux};
 			m_cond.wait(lock, [this] { return !m_queue.empty() || m_quit; });
@@ -547,7 +551,7 @@ public:
 		for (auto&& task : queue)
 			task->Execute();
 		
-		m_count += queue.size();
+		m_total += queue.size();
 		return queue.size();
 	}
 	
@@ -569,13 +573,13 @@ public:
 		return threads;
 	}
 	
-	auto Count() const
+	auto TotalTaskExecuted() const
 	{
-		return m_count.load();
+		return m_total.load();
 	}
 	
 	// Called by ExecutorBase using CRTP
-	void Post(std::shared_ptr<TaskBase>&& task)
+	void Post(TaskPointer&& task)
 	{
 		std::unique_lock<std::mutex> lock{m_mux};
 		m_queue.push_back(std::move(task));
@@ -583,11 +587,11 @@ public:
 	}
 	
 private:
-	std::mutex                              m_mux;
-	std::condition_variable                 m_cond;
-	std::deque<std::shared_ptr<TaskBase>>   m_queue;
-	std::atomic<bool>                       m_quit{false};
-	std::atomic<std::size_t>                m_count{0};
+	std::mutex                  m_mux;
+	std::condition_variable     m_cond;
+	std::deque<TaskPointer>     m_queue;
+	std::atomic<bool>           m_quit{false};
+	std::atomic<std::size_t>    m_total{0};
 };
 
 template <typename Func, typename Future>

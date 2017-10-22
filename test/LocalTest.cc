@@ -108,7 +108,7 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 		w.join();
 	
 	// Run() called 3 times: once for async() callback, twice for then() callback
-	REQUIRE(exe.Count() == 3U);
+	REQUIRE(exe.TotalTaskExecuted() == 3U);
 }
 
 TEST_CASE( "Simple async single thread case", "[normal]" )
@@ -130,7 +130,7 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	REQUIRE(!executed);
 	REQUIRE(exe.Run() == 1);
 	REQUIRE(executed);
-	REQUIRE(exe.Count() == 1);
+	REQUIRE(exe.TotalTaskExecuted() == 1);
 	
 	executed = false;
 	fut.then([&executed, tid](future<double> val)
@@ -144,7 +144,7 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	REQUIRE(!executed);
 	REQUIRE(exe.Run() == 1);
 	REQUIRE(executed);
-	REQUIRE(exe.Count() == 2);
+	REQUIRE(exe.TotalTaskExecuted() == 2);
 }
 
 TEST_CASE( "Two executors", "[normal]" )
