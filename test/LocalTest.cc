@@ -133,11 +133,11 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	REQUIRE(exe.TotalTaskExecuted() == 1);
 	
 	executed = false;
-	fut.then([&executed, tid](future<double> val)
+	fut.then([&executed, tid](auto fut_val)
 	{
-		REQUIRE(val.is_ready());
+		REQUIRE(fut_val.is_ready());
 		REQUIRE(tid == std::this_thread::get_id());
-		REQUIRE(val.get() == 0.5);
+		REQUIRE(fut_val.get() == 0.5);
 		executed = true;
 	}, &exe);
 	
@@ -167,7 +167,7 @@ TEST_CASE( "Two executors", "[normal]" )
 	}, &exe1);
 	
 	// Similarly, run the continuation routine on exe2 and verify the thread ID.
-	fut.then([tid=thread2.get_id(), &run2](future<std::string> s)
+	fut.then([tid=thread2.get_id(), &run2](auto s)
 	{
 		REQUIRE(s.get() == "string"s);
 		REQUIRE(std::this_thread::get_id() == tid);
@@ -198,34 +198,30 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 		futures.push_back(async([]{ return 100; }, &exe1));
 		futures.push_back(async([]{ return 101; }, &exe2));
 		
-		result = when_all(futures.begin(), futures.end()).then(
-			[](future<std::vector<int>> fints)
-			{
-				REQUIRE(fints.is_ready());
-				auto ints = fints.get();
-				REQUIRE(ints.size() == 2);
-				REQUIRE(ints.front() == 100);
-				REQUIRE(ints.back() == 101);
-				return true;
-			}, &exe2
-		);
+		result = when_all(futures.begin(), futures.end()).then([](auto fut)
+		{
+			REQUIRE(fut.is_ready());
+			auto vec_ints = fut.get();
+			REQUIRE(vec_ints.size() == 2);
+			REQUIRE(vec_ints.front() == 100);
+			REQUIRE(vec_ints.back() == 101);
+			return true;
+		}, &exe2);
 	}
 	SECTION("2 shared_future<int>'s")
 	{
 		std::vector<shared_future<int>> futures;
 		futures.push_back(async([]{ return 100; }, &exe1).share());
 		futures.push_back(async([]{ return 101; }, &exe2).share());
-		result = when_all(futures.begin(), futures.end()).then(
-			[](future<std::vector<int>> fints)
-			{
-				REQUIRE(fints.is_ready());
-				auto ints = fints.get();
-				REQUIRE(ints.size() == 2);
-				REQUIRE(ints.front() == 100);
-				REQUIRE(ints.back() == 101);
-				return true;
-			}, &exe2
-		);
+		result = when_all(futures.begin(), futures.end()).then([](auto fut)
+		{
+			REQUIRE(fut.is_ready());
+			auto vec_ints = fut.get();
+			REQUIRE(vec_ints.size() == 2);
+			REQUIRE(vec_ints.front() == 100);
+			REQUIRE(vec_ints.back() == 101);
+			return true;
+		}, &exe2);
 	}
 	
 	REQUIRE(result.get());
@@ -267,9 +263,10 @@ TEST_CASE("test shared_future::then()", "[normal]")
 	auto fut = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
 	auto copy = fut;
 
-	auto future_cont = fut.then([&run2](shared_future<void> f)
+	auto future_cont = fut.then([&run2](auto shut)
 	{
-		REQUIRE(f.is_ready());
+		REQUIRE(shut.is_ready());
+		shut.get();
 		run2 = true;
 	}, &exe);
 #ifndef _MSC_VER
@@ -279,7 +276,7 @@ TEST_CASE("test shared_future::then()", "[normal]")
 	SECTION("call then() on the same shared_future")
 	{
 		bool run3 = false;
-		fut.then([&run3](shared_future<void> f)
+		fut.then([&run3](auto f)
 		{
 			REQUIRE(f.is_ready());
 			run3 = true;
@@ -288,9 +285,9 @@ TEST_CASE("test shared_future::then()", "[normal]")
 	}
 	SECTION("call then() on a copy")
 	{
-		copy.then([&run1](shared_future<void> f)
+		copy.then([&run1](auto shut)  // "shut" = "SHared fUTure"
 		{
-			REQUIRE(f.is_ready());
+			REQUIRE(shut.is_ready());
 			run1 = true;
 		}, &exe).wait();
 		REQUIRE(run1);
@@ -313,7 +310,7 @@ TEST_CASE("test exception in async", "[normal]")
 	auto fut = async([]{throw -1;}, &exe);
 	SECTION("call then() with a future with an exception")
 	{
-		fut.then([](future<void> fut)
+		fut.then([](auto fut)
 		{
 			REQUIRE_THROWS_AS(fut.get(), int&);
 		}, &exe);
@@ -342,12 +339,10 @@ TEST_CASE( "unwrap future", "[normal]" )
 	
 	SECTION("then() on the future<future<T>>")
 	{
-		future<int>{std::move(ffi)}.then(
-			[](future<int> f)
-			{
-				REQUIRE(f.get() == 100);
-			}, &exe
-		).wait();
+		future<int>{std::move(ffi)}.then([](auto f)
+		{
+			REQUIRE(f.get() == 100);
+		}, &exe).wait();
 	}
 	SECTION("get() and wait() on the future")
 	{
@@ -381,7 +376,7 @@ TEST_CASE("then() without specifying an executor")
 	
 	// If we don't specify an executor, the continuation routine will be run in the same
 	// executor as the async task that produce the future.
-	auto then_fut = fi.then([tid, &run](future<void>)
+	auto then_fut = fi.then([tid, &run](auto)
 	{
 		REQUIRE(std::this_thread::get_id() == tid);
 		run = true;
