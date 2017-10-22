@@ -21,7 +21,7 @@ TEST_CASE( "Inline executor", "[normal]")
 {
 	auto run = false;
 	
-	InlineExecutor subject;
+	auto subject = InlineExecutor::New();
 	
 	SECTION("run in the same thread")
 	{
@@ -32,7 +32,7 @@ TEST_CASE( "Inline executor", "[normal]")
 				REQUIRE(std::this_thread::get_id() == tid);
 				run = true;
 				return 100;
-			}, &subject
+			}, subject.get()
 		);
 		
 		// no need to wait() because everything are in this thread
@@ -61,7 +61,7 @@ TEST_CASE( "Inline executor", "[normal]")
 			REQUIRE(std::this_thread::get_id() == q_tid);
 			REQUIRE(fint.get() == 100);
 			run2 = true;
-		}, &subject).wait();
+		}, subject.get()).wait();
 		
 		REQUIRE(run2);
 		

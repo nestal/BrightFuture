@@ -52,6 +52,8 @@ public:
 	virtual void Execute(std::shared_ptr<TaskBase>&& task) = 0;
 	virtual Token Add(std::shared_ptr<TaskBase>&& task) = 0;
 	virtual void Schedule(Token token) = 0;
+	virtual std::shared_ptr<Executor> ShareFromThis() {return {};}
+	virtual std::shared_ptr<const Executor> ShareFromThis() const {return {};}
 };
 
 ///
@@ -383,19 +385,35 @@ private:
 ///   thread as the previous async task.
 /// - If the previous async task has been finished, then run the current function immediately.
 ///
-struct InlineExecutor : ExecutorBase<InlineExecutor>
+class InlineExecutor : public ExecutorBase<InlineExecutor>, public std::enable_shared_from_this<InlineExecutor>
 {
+private:
+	InlineExecutor() = default;
+	
+public:
+	static auto New() { return std::shared_ptr<InlineExecutor>(new InlineExecutor);}
+	
 	void Post(std::shared_ptr<TaskBase>&& task)
 	{
 		task->Execute();
 	}
 	
+	std::shared_ptr<Executor> ShareFromThis() override
+	{
+		return shared_from_this();
+	}
+	
+	std::shared_ptr<const Executor> ShareFromThis() const override
+	{
+		return shared_from_this();
+	}
+	
 	static auto Alternative(Executor *& exec)
 	{
-		std::shared_ptr<InlineExecutor> replacement;
-		if (!exec)
+		auto replacement{exec ? exec->ShareFromThis() : std::shared_ptr<Executor>{}};
+		if (!exec && !replacement)
 		{
-			replacement = std::make_shared<InlineExecutor>();
+			replacement = New();
 			exec = replacement.get();
 		}
 		return replacement;
@@ -417,7 +435,7 @@ future<T>::future(future<future<T>>&& fut)
 	promise<T> fwd;
 	*this = fwd.get_future();
 	
-	auto exe = std::make_shared<InlineExecutor>();
+	auto exe = InlineExecutor::New();
 	
 	// It's OK to capture a shared_ptr to InlineExecutor in the callback that is queued to
 	// itself, because the InlineExecutor will not destroy the std::function passed to it
@@ -691,11 +709,11 @@ public:
 	
 	auto Executor()
 	{
-		return &m_exec;
+		return m_exec.get();
 	}
 	
 private:
-	InlineExecutor              m_exec;
+	std::shared_ptr<InlineExecutor>             m_exec{InlineExecutor::New()};
 	promise<std::vector<T>>     m_promise;
 	
 	std::mutex                  m_mux;
