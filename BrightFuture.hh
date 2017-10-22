@@ -47,7 +47,7 @@ using TaskPointer = std::shared_ptr<TaskBase>;
 /// The Executor serves two purposes: to schedule callback functions and to execute them.
 /// This is the abstract interface of an Executor. It's to be used with a Token.
 ///
-class Executor : virtual public std::enable_shared_from_this<Executor>
+class Executor : public std::enable_shared_from_this<Executor>
 {
 public:
 	virtual ~Executor() = default;
@@ -310,7 +310,7 @@ private:
 };
 
 template <typename ConcreteExecutor>
-class ExecutorBase : public Executor
+class ExecutorBase : virtual public Executor
 {
 public:
 	ExecutorBase() = default;
