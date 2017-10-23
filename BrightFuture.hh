@@ -598,6 +598,8 @@ auto Async(Func&& function, Future&& arg, Executor *host)
 {
 	assert(arg.valid());
 	
+//	arg.is_ready();
+	
 	auto token_queue = arg.m_token;
 	assert(token_queue);
 	
@@ -606,8 +608,8 @@ auto Async(Func&& function, Future&& arg, Executor *host)
 	// because we need to keep the executor alive until the task function has returned.
 	auto task   = std::make_shared<Task<Future, Func>>(std::forward<Future>(arg), std::forward<Func>(function), host);
 	auto result = task->GetResult();
-	auto token  = host->Add(std::move(task));
-
+	auto token = host->Add(std::move(task));
+	
 	// There is a race condition here: whether or not the last async call has finished or not.
 
 	// If it has finished, it should have already Scheduled() all continuation tokens in the
@@ -615,7 +617,7 @@ auto Async(Func&& function, Future&& arg, Executor *host)
 	// look at the queue again. We need to schedule our cont_token here.
 
 	// Otherwise, PushBack() will returns true, that means the last async call has not finished
-	// and the cont_token is added to the queue. In this case the token will be Scheduled()
+	// and the token is added to the queue. In this case the token will be Scheduled()
 	// by the async call when it finishes. We don't need to call Schedule() ourselves.
 	if (!token_queue->PushBack(token))
 		host->Schedule(token);

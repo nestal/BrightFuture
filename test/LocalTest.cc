@@ -17,6 +17,19 @@
 using namespace BrightFuture;
 using namespace Catch::Matchers;
 
+TEST_CASE("executors in future and promise")
+{
+	auto exe = QueueExecutor::New();
+	
+	promise<void> subject{exe};
+	auto future = subject.get_future();
+	
+	REQUIRE(future.ExecutorToUse() == exe);
+	
+	auto shared_future = future.share();
+	REQUIRE(shared_future.ExecutorToUse() == exe);
+}
+
 TEST_CASE("then() without specifying an executor")
 {
 	using namespace std::chrono_literals;
@@ -28,10 +41,10 @@ TEST_CASE("then() without specifying an executor")
 	std::promise<void> ready;
 	bool is_ready = false;
 	
-	auto fi = async([wait_for_ready=ready.get_future(), &is_ready]() mutable
+	auto fi = async([ready=ready.get_future(), &is_ready]() mutable
 	{
 		// wait until we attach a continuation before proceeding
-		wait_for_ready.get();
+		ready.get();
 		REQUIRE(is_ready);
 	}, exe.get());
 	
@@ -91,7 +104,7 @@ TEST_CASE( "Inline executor", "[normal]")
 		// The InlineExecutor will run the callbacks in the same thread that schedule them.
 		// In this case, the thread that schedule them is the QueueExecutor.
 		bool run2 = false;
-		fut.then([q_tid, &run2](future<int> fint)
+		fut.then([q_tid, &run2](auto fint)
 		{
 			REQUIRE(std::this_thread::get_id() == q_tid);
 			REQUIRE(fint.get() == 100);
