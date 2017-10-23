@@ -14,9 +14,7 @@
 
 namespace BrightFuture {
 
-class QtGuiExecutor :
-	public ExecutorBase<QtGuiExecutor>,
-	public std::enable_shared_from_this<QtGuiExecutor>
+class QtGuiExecutor : public ExecutorBase<QtGuiExecutor>
 {
 private:
 	template <typename Func>
@@ -51,31 +49,15 @@ public:
 	explicit QtGuiExecutor(Private) : QtGuiExecutor{} {}
 	
 	template <typename Func>
-	static void Post(Func&& func, QObject *dest = qApp)
+	static void PostMain(Func&& func, QObject *dest = qApp)
 	{
 		QCoreApplication::postEvent(dest, new FunctorEvent<Func>(std::forward<Func>(func)));
 	}
 
 	// Called by ExecutorBase using CRTP
-	template <typename Func>
-	static void ExecuteTask(Func&& task)
-	{
-		Post(std::forward<Func>(task));
-	}
-	
 	static void Post(TaskPointer&& task)
 	{
-		Post([task=std::move(task)]{task->Execute();});
-	}
-	
-	std::shared_ptr<BrightFuture::Executor> ShareFromThis()
-	{
-		return shared_from_this();
-	}
-	
-	std::shared_ptr<const BrightFuture::Executor> ShareFromThis() const
-	{
-		return shared_from_this();
+		PostMain([task=std::move(task)]{task->Execute();});
 	}
 };
 
