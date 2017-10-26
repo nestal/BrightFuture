@@ -363,7 +363,7 @@ private:
 ///   thread as the previous async task.
 /// - If the previous async task has been finished, then run the current function immediately.
 ///
-class InlineExecutor : public ExecutorBase<InlineExecutor>
+class InlineExecutor : public Executor
 {
 private:
 	InlineExecutor() = default;
@@ -372,11 +372,28 @@ private:
 public:
 	explicit InlineExecutor(Private) : InlineExecutor{} {}
 	static auto New() { return std::make_shared<InlineExecutor>(Private{});}
-	
-	void Post(TaskPointer&& task)
+
+	void Execute(TaskPointer&& task)
 	{
-		task->Execute();
+		auto t = std::move(task);
+		t->Execute();
 	}
+	Token Add(TaskPointer&& task)
+	{
+		assert(!m_task);
+		atomic_store(&m_task, task);
+		return {this, 0};
+	}
+	void Schedule(Token token)
+	{
+		assert(token.event == 0);
+		assert(token.host == this);
+		auto task = atomic_exchange(&m_task, {});
+		Execute(std::move(task));
+	}
+
+private:
+	TaskPointer m_task;
 };
 
 template <typename T>
@@ -435,10 +452,6 @@ future<T>::future(future<future<T>>&& fut)
 	promise<T> fwd{fut.ExecutorToUse()->shared_from_this()};
 	*this = fwd.get_future();
 	
-	// It's OK to capture a shared_ptr to InlineExecutor in the callback that is queued to
-	// itself, because the InlineExecutor will not destroy the std::function passed to it
-	// in ExecuteTask(). When the last std::function in the InlineExecutor is destroyed,
-	// the InlineExecutor itself will be freed.
 	fut.then([fwd=std::move(fwd)](future<future<T>> fut) mutable
 	{
 		try
@@ -597,18 +610,13 @@ template <typename Func, typename Future>
 auto Async(Func&& function, Future&& arg, Executor *host)
 {
 	assert(arg.valid());
-	
-//	arg.is_ready();
-	
+
 	auto token_queue = arg.m_token;
 	assert(token_queue);
 	
-	// If host is null, create an InlineExecutor as an alternative.
-	// We need to capture that InlineExecutor in the task function that will be Add()'ed,
-	// because we need to keep the executor alive until the task function has returned.
 	auto task   = std::make_shared<Task<Future, Func>>(std::forward<Future>(arg), std::forward<Func>(function), host);
 	auto result = task->GetResult();
-	auto token = host->Add(std::move(task));
+	auto token  = host->Add(std::move(task));
 	
 	// There is a race condition here: whether or not the last async call has finished or not.
 
