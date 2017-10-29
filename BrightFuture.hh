@@ -183,6 +183,7 @@ public:
 
 	Executor* ExecutorToUse(Executor *exec = nullptr) const
 	{
+		assert(m_exec);
 		return exec ? exec : m_exec;
 	}
 
@@ -416,10 +417,6 @@ future<T>::future(future<future<T>>&& fut)
 	promise<T> fwd{fut.ExecutorToUse()};
 	*this = fwd.get_future();
 	
-	// It's OK to capture a shared_ptr to InlineExecutor in the callback that is queued to
-	// itself, because the InlineExecutor will not destroy the std::function passed to it
-	// in ExecuteTask(). When the last std::function in the InlineExecutor is destroyed,
-	// the InlineExecutor itself will be freed.
 	fut.then([fwd=std::move(fwd)](future<future<T>> fut) mutable
 	{
 		try
@@ -605,9 +602,6 @@ auto Async(Func&& function, Future&& arg, Executor *host)
 	auto token_queue = arg.m_token;
 	assert(token_queue);
 	
-	// If host is null, create an InlineExecutor as an alternative.
-	// We need to capture that InlineExecutor in the task function that will be Add()'ed,
-	// because we need to keep the executor alive until the task function has returned.
 	auto task   = std::make_shared<Task<Future, Func>>(std::forward<Future>(arg), std::forward<Func>(function), host);
 	auto result = task->GetResult();
 	auto token = host->Add(std::move(task));
