@@ -26,11 +26,35 @@ public:
 	
 	void Post(TaskPointer&& task)
 	{
-		m_ios.post([task=std::move(task)]{task->Execute();});
+		m_ios.post([task = std::move(task)] { task->Execute(); });
 	}
 
 private:
 	boost::asio::io_service& m_ios;
 };
+
+class BoostAsioExecutorService : public boost::asio::io_service::service
+{
+public:
+	explicit BoostAsioExecutorService(boost::asio::io_service& ios) :
+		service{ios},
+		m_exec{std::make_shared<BoostAsioExecutor>(ios)}
+	{
+	}
+	
+	ExecutorPointer Get() const
+	{
+		return m_exec;
+	}
+	
+	static boost::asio::io_service::id id;
+	
+	void shutdown_service() override {}
+	
+private:
+	std::shared_ptr<BoostAsioExecutor>  m_exec;
+};
+
+//boost::asio::io_service::id BoostAsioExecutorService::id;
 
 } // end of namespace
