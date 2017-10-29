@@ -432,7 +432,7 @@ private:
 template <typename T>
 future<T>::future(future<future<T>>&& fut)
 {
-	promise<T> fwd{fut.ExecutorToUse()->shared_from_this()};
+	promise<T> fwd{fut.ExecutorToUse()};
 	*this = fwd.get_future();
 	
 	// It's OK to capture a shared_ptr to InlineExecutor in the callback that is queued to
@@ -671,7 +671,13 @@ template <typename T>
 class IntermediateResultOfWhenAll
 {
 public:
-	explicit IntermediateResultOfWhenAll(std::size_t total) : m_total{total} {}
+	explicit IntermediateResultOfWhenAll(std::size_t total, ExecutorPointer exec) :
+		m_promise{std::move(exec)}, m_total{total}
+	{
+		// If there is no future to wait, Process() will not be called.
+		if (m_total == 0)
+			m_promise.set_value(std::vector<T>());
+	}
 
 	template <typename Future> // Should be future<T> or shared_future<T>
 	void Process(Future&& fut, std::size_t index)
@@ -727,11 +733,16 @@ auto when_all(InputIt first, InputIt last)
 	std::vector<Future> futures;
 	std::move(first, last, std::back_inserter(futures));
 
-	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(futures.size());
-	for (auto i = futures.size()*0 ; i < futures.size(); i++)
-		futures[i].then([intermediate, i](auto&& fut)
+	// Use the executor from the first future for the resultant future.
+	// No particular reason, just pick one.
+	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(
+		futures.size(),
+		futures.empty() ? InlineExecutor::New() : futures.front().ExecutorToUse()
+	);
+	for (auto&& future : futures)
+		future.then([intermediate, index=&future-&futures.front()](auto&& fut)
 		{
-			intermediate->Process(std::forward<decltype(fut)>(fut), i);
+			intermediate->Process(std::forward<decltype(fut)>(fut), index);
 		});
 	
 	return intermediate->Result();

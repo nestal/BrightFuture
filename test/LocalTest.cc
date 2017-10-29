@@ -10,6 +10,7 @@
 //
 
 #include <iostream>
+
 #include "BrightFuture.hh"
 
 #include "catch.hpp"
@@ -72,13 +73,13 @@ TEST_CASE( "Inline executor", "[normal]")
 	auto run = false;
 	
 	auto subject = InlineExecutor::New();
+	auto main_thread = std::this_thread::get_id();
 	
 	SECTION("run in the same thread")
 	{
-		auto tid = std::this_thread::get_id();
-		auto fut = async([tid, &run]
+		auto fut = async([main_thread, &run]
 		{
-			REQUIRE(std::this_thread::get_id() == tid);
+			REQUIRE(std::this_thread::get_id() == main_thread);
 			run = true;
 			return 100;
 		}, subject.get());
@@ -94,22 +95,39 @@ TEST_CASE( "Inline executor", "[normal]")
 		auto worker = exe2->Spawn();
 		auto q_tid = worker.get_id();
 		
-		auto fut = async([q_tid, &run]
+		std::promise<void> ready;
+		
+		auto fut = async([q_tid, &run, ready=ready.get_future()]() mutable
 		{
+			// Wait until the main thread has called then().
+			// InlineExecutor will run the continuation routine inside then() if the
+			// promise is already ready _before_ then() is called. We will to
+			// avoid that in this test case.
+			ready.get();
+			
 			REQUIRE(std::this_thread::get_id() == q_tid);
 			run = true;
 			return 100;
 		}, exe2.get());
 
+		using namespace std::chrono_literals;
+		std::this_thread::sleep_for(1s);
+		
 		// The InlineExecutor will run the callbacks in the same thread that schedule them.
 		// In this case, the thread that schedule them is the QueueExecutor.
 		bool run2 = false;
-		fut.then([q_tid, &run2](auto fint)
+		auto end = fut.then([q_tid, main_thread, &run2](auto fint)
 		{
+			REQUIRE(std::this_thread::get_id() != main_thread);
 			REQUIRE(std::this_thread::get_id() == q_tid);
 			REQUIRE(fint.get() == 100);
 			run2 = true;
-		}, subject.get()).wait();
+		}, subject.get());
+		
+		// Set ready _after_ calling then() to make sure the continuation routine
+		// is not run inside then().
+		ready.set_value();
+		end.wait();
 		
 		REQUIRE(run2);
 		
@@ -232,6 +250,17 @@ TEST_CASE( "Two executors", "[normal]" )
 	
 	REQUIRE(run1);
 	REQUIRE(run2);
+}
+
+TEST_CASE( "WhenAll empty input", "[normal]" )
+{
+	bool run = false;
+	std::vector<future<int>> in;
+	auto subject = when_all(in.begin(), in.end()).then([&run](auto fut)
+	{
+		run = true;
+	});
+	REQUIRE(run);
 }
 
 TEST_CASE( "WhenAll 2 promises", "[normal]" )
