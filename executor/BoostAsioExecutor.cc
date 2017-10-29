@@ -1,9 +1,8 @@
 /*
 	Copyright © 2017 Wan Wai Ho <me@nestal.net>
-    
-    This file is subject to the terms and conditions of the GNU General Public
-    License.  See the file COPYING in the main directory of the BrightFuture
-    distribution for more details.
+	Distributed under the Boost Software License, Version 1.0.
+	(See accompanying file LICENSE_1_0.txt or copy at
+	http://www.boost.org/LICENSE_1_0.txt)
 */
 
 //
