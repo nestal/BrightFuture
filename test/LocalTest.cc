@@ -145,7 +145,7 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 	// use two new threads to run the executor
 	auto worker = exe->Spawn(2);
 	REQUIRE(worker.size() == 2);
-	std::vector<std::thread::id> tids = {worker.front().get_id(), worker.back().get_id()};
+	std::vector<std::thread::id> tids{worker.front().get_id(), worker.back().get_id()};
 	
 	auto fut = async([tids]
 	{
