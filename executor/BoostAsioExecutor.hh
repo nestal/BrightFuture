@@ -17,44 +17,23 @@
 
 namespace BrightFuture {
 
-class BoostAsioExecutor : public BrightFuture::ExecutorBase<BoostAsioExecutor>
+class BoostAsioExecutor :
+	public BrightFuture::ExecutorBase<BoostAsioExecutor>,
+	public boost::asio::io_service::service
 {
 public:
-	BoostAsioExecutor(boost::asio::io_service& ios) : m_ios{ios}
+	explicit BoostAsioExecutor(boost::asio::io_service& ios) : service{ios}
 	{
 	}
 	
 	void Post(TaskPointer&& task)
 	{
-		m_ios.post([task = std::move(task)] { task->Execute(); });
+		get_io_service().post([task = std::move(task)] { task->Execute(); });
 	}
-
-private:
-	boost::asio::io_service& m_ios;
-};
-
-class BoostAsioExecutorService : public boost::asio::io_service::service
-{
-public:
-	explicit BoostAsioExecutorService(boost::asio::io_service& ios) :
-		service{ios},
-		m_exec{std::make_shared<BoostAsioExecutor>(ios)}
-	{
-	}
-	
-	ExecutorPointer Get() const
-	{
-		return m_exec;
-	}
-	
-	static boost::asio::io_service::id id;
 	
 	void shutdown_service() override {}
 	
-private:
-	std::shared_ptr<BoostAsioExecutor>  m_exec;
+	static boost::asio::io_service::id id;
 };
-
-//boost::asio::io_service::id BoostAsioExecutorService::id;
 
 } // end of namespace

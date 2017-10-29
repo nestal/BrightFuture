@@ -529,7 +529,7 @@ public:
 	}
 };
 
-Executor* DefaultExecutor()
+inline Executor* DefaultExecutor()
 {
 	static auto inst = InlineExecutor::New();
 	return inst.get();
