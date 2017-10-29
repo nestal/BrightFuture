@@ -515,14 +515,8 @@ private:
 ///
 class InlineExecutor : public ExecutorBase<InlineExecutor>
 {
-private:
-	InlineExecutor() = default;
-	struct Private {};
-	
 public:
-	explicit InlineExecutor(Private) : InlineExecutor{} {}
-	static auto New() { return std::make_shared<InlineExecutor>(Private{});}
-	
+	InlineExecutor() = default;
 	void Post(TaskPointer&& task)
 	{
 		task->Execute();
@@ -531,19 +525,14 @@ public:
 
 inline Executor* DefaultExecutor()
 {
-	static auto inst = InlineExecutor::New();
-	return inst.get();
+	static InlineExecutor inst;
+	return &inst;
 }
 
 class QueueExecutor : public ExecutorBase<QueueExecutor>
 {
-private:
-	QueueExecutor() = default;
-	struct Private {};
-	
 public:
-	explicit QueueExecutor(Private) : QueueExecutor{} {}
-	static auto New() { return std::make_shared<QueueExecutor>(Private{});}
+	QueueExecutor() = default;
 	
 	auto Run()
 	{

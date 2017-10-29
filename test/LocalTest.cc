@@ -20,23 +20,23 @@ using namespace Catch::Matchers;
 
 TEST_CASE("executors in future and promise")
 {
-	auto exe = QueueExecutor::New();
+	QueueExecutor exe;
 	
-	promise<void> subject{exe.get()};
+	promise<void> subject{&exe};
 	auto future = subject.get_future();
 	
-	REQUIRE(future.ExecutorToUse() == exe.get());
+	REQUIRE(future.ExecutorToUse() == &exe);
 	
 	auto shared_future = future.share();
-	REQUIRE(shared_future.ExecutorToUse() == exe.get());
+	REQUIRE(shared_future.ExecutorToUse() == &exe);
 }
 
 TEST_CASE("then() without specifying an executor")
 {
 	using namespace std::chrono_literals;
 	
-	auto exe = QueueExecutor::New();
-	auto thread = exe->Spawn();
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
 	auto tid = thread.get_id();
 
 	std::promise<void> ready;
@@ -47,15 +47,15 @@ TEST_CASE("then() without specifying an executor")
 		// wait until we attach a continuation before proceeding
 		ready.get();
 		REQUIRE(is_ready);
-	}, exe.get());
+	}, &exe);
 	
 	bool run = false;
 	
 	// If we don't specify an executor, the continuation routine will be run in the same
 	// executor as the async task that produce the future.
-	auto then_fut = fi.then([tid, &run, exe](auto fut)
+	auto then_fut = fi.then([tid, &run, &exe](auto fut)
 	{
-		REQUIRE(fut.ExecutorToUse() == exe.get());
+		REQUIRE(fut.ExecutorToUse() == &exe);
 		REQUIRE(std::this_thread::get_id() == tid);
 		run = true;
 	});
@@ -64,7 +64,7 @@ TEST_CASE("then() without specifying an executor")
 	ready.set_value();
 	
 	then_fut.wait();
-	exe->Quit();
+	exe.Quit();
 	thread.join();
 }
 
@@ -72,7 +72,7 @@ TEST_CASE( "Inline executor", "[normal]")
 {
 	auto run = false;
 	
-	auto subject = InlineExecutor::New();
+	auto subject = DefaultExecutor();
 	auto main_thread = std::this_thread::get_id();
 	
 	SECTION("run in the same thread")
@@ -82,7 +82,7 @@ TEST_CASE( "Inline executor", "[normal]")
 			REQUIRE(std::this_thread::get_id() == main_thread);
 			run = true;
 			return 100;
-		}, subject.get());
+		}, subject);
 		
 		// no need to wait() because everything are in this thread
 		
@@ -91,8 +91,8 @@ TEST_CASE( "Inline executor", "[normal]")
 	}
 	SECTION("run in remote thread")
 	{
-		auto exe2 = QueueExecutor::New();
-		auto worker = exe2->Spawn();
+		QueueExecutor exe2;
+		auto worker = exe2.Spawn();
 		auto q_tid = worker.get_id();
 		
 		std::promise<void> ready;
@@ -108,7 +108,7 @@ TEST_CASE( "Inline executor", "[normal]")
 			REQUIRE(std::this_thread::get_id() == q_tid);
 			run = true;
 			return 100;
-		}, exe2.get());
+		}, &exe2);
 
 		using namespace std::chrono_literals;
 		std::this_thread::sleep_for(1s);
@@ -122,7 +122,7 @@ TEST_CASE( "Inline executor", "[normal]")
 			REQUIRE(std::this_thread::get_id() == q_tid);
 			REQUIRE(fint.get() == 100);
 			run2 = true;
-		}, subject.get());
+		}, subject);
 		
 		// Set ready _after_ calling then() to make sure the continuation routine
 		// is not run inside then().
@@ -131,7 +131,7 @@ TEST_CASE( "Inline executor", "[normal]")
 		
 		REQUIRE(run2);
 		
-		exe2->Quit();
+		exe2.Quit();
 		worker.join();
 	}
 	REQUIRE(run);
@@ -140,10 +140,10 @@ TEST_CASE( "Inline executor", "[normal]")
 TEST_CASE( "Simple async multithread case", "[normal]" )
 {
 	using namespace std::chrono_literals;
-	auto exe = QueueExecutor::New();
+	QueueExecutor exe;
 	
 	// use two new threads to run the executor
-	auto worker = exe->Spawn(2);
+	auto worker = exe.Spawn(2);
 	REQUIRE(worker.size() == 2);
 	std::vector<std::thread::id> tids{worker.front().get_id(), worker.back().get_id()};
 	
@@ -152,18 +152,18 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		std::this_thread::sleep_for(1000ms);
 		return 100;
-	}, exe.get());
+	}, &exe);
 	
-	fut.then([tids, exe](future<int> val)
+	fut.then([tids, &exe](future<int> val)
 	{
-		REQUIRE(val.ExecutorToUse() == exe.get());
+		REQUIRE(val.ExecutorToUse() == &exe);
 		REQUIRE(val.is_ready());
 		REQUIRE(val.get() == 100);
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		return std::string{"abc"};
-	}).then([tids, exe](future<std::string> s)
+	}).then([tids, &exe](future<std::string> s)
 	{
-		REQUIRE(s.ExecutorToUse() == exe.get());
+		REQUIRE(s.ExecutorToUse() == &exe);
 		REQUIRE(s.is_ready());
 		REQUIRE(s.get() == "abc");
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
@@ -171,19 +171,19 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 	}).wait();
 
 	// Quit the worker threads
-	exe->Quit();
+	exe.Quit();
 	for (auto&& w : worker)
 		w.join();
 	
 	// Run() called 3 times: once for async() callback, twice for then() callback
-	REQUIRE(exe->TotalTaskExecuted() == 3U);
+	REQUIRE(exe.TotalTaskExecuted() == 3U);
 }
 
 TEST_CASE( "Simple async single thread case", "[normal]" )
 {
 	using namespace std::chrono_literals;
 
-	auto exe = QueueExecutor::New();
+	QueueExecutor exe;
 	auto tid = std::this_thread::get_id();
 	
 	bool executed{false};
@@ -193,12 +193,12 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 		std::this_thread::sleep_for(200ms);
 		executed = true;
 		return 0.5;
-	}, exe.get());
+	}, &exe);
 	
 	REQUIRE(!executed);
-	REQUIRE(exe->Run() == 1);
+	REQUIRE(exe.Run() == 1);
 	REQUIRE(executed);
-	REQUIRE(exe->TotalTaskExecuted() == 1);
+	REQUIRE(exe.TotalTaskExecuted() == 1);
 	
 	executed = false;
 	fut.then([&executed, tid](auto fut_val)
@@ -210,19 +210,18 @@ TEST_CASE( "Simple async single thread case", "[normal]" )
 	});
 	
 	REQUIRE(!executed);
-	REQUIRE(exe->Run() == 1);
+	REQUIRE(exe.Run() == 1);
 	REQUIRE(executed);
-	REQUIRE(exe->TotalTaskExecuted() == 2);
+	REQUIRE(exe.TotalTaskExecuted() == 2);
 }
 
 TEST_CASE( "Two executors", "[normal]" )
 {
 	using namespace std::string_literals;
 
-	auto exe1 = QueueExecutor::New();
-	auto exe2 = QueueExecutor::New();
-	auto thread1 = exe1->Spawn();
-	auto thread2 = exe2->Spawn();
+	QueueExecutor exe1, exe2;
+	auto thread1 = exe1.Spawn();
+	auto thread2 = exe2.Spawn();
 	
 	auto run1 = false, run2 = false;
 	
@@ -233,7 +232,7 @@ TEST_CASE( "Two executors", "[normal]" )
 		REQUIRE(std::this_thread::get_id() == tid);
 		run1 = true;
 		return "string"s;
-	}, exe1.get());
+	}, &exe1);
 	
 	// Similarly, run the continuation routine on exe2 and verify the thread ID.
 	fut.then([tid=thread2.get_id(), &run2](auto s)
@@ -241,10 +240,10 @@ TEST_CASE( "Two executors", "[normal]" )
 		REQUIRE(s.get() == "string"s);
 		REQUIRE(std::this_thread::get_id() == tid);
 		run2 = true;
-	}, exe2.get()).wait();
+	}, &exe2).wait();
 	
-	exe1->Quit();
-	exe2->Quit();
+	exe1.Quit();
+	exe2.Quit();
 	thread1.join();
 	thread2.join();
 	
@@ -266,18 +265,18 @@ TEST_CASE( "WhenAll empty input", "[normal]" )
 TEST_CASE( "WhenAll 2 promises", "[normal]" )
 {
 	using namespace std::chrono_literals;
-	auto exe1 = QueueExecutor::New();
-	auto exe2 = QueueExecutor::New();
-	auto thread1 = exe1->Spawn();
-	auto thread2 = exe2->Spawn();
+	QueueExecutor exe1;
+	QueueExecutor exe2;
+	auto thread1 = exe1.Spawn();
+	auto thread2 = exe2.Spawn();
 	
 	future<bool> result;
 	
 	SECTION("2 future<int>'s")
 	{
 		std::vector<future<int>> futures;
-		futures.push_back(async([]{ return 100; }, exe1.get()));
-		futures.push_back(async([]{ return 101; }, exe2.get()));
+		futures.push_back(async([]{ return 100; }, &exe1));
+		futures.push_back(async([]{ return 101; }, &exe2));
 		
 		result = when_all(futures.begin(), futures.end()).then([](auto fut)
 		{
@@ -287,13 +286,13 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 			REQUIRE(vec_ints.front() == 100);
 			REQUIRE(vec_ints.back() == 101);
 			return true;
-		}, exe2.get());
+		}, &exe2);
 	}
 	SECTION("2 shared_future<int>'s")
 	{
 		std::vector<shared_future<int>> futures;
-		futures.push_back(async([]{ return 100; }, exe1.get()).share());
-		futures.push_back(async([]{ return 101; }, exe2.get()).share());
+		futures.push_back(async([]{ return 100; }, &exe1).share());
+		futures.push_back(async([]{ return 101; }, &exe2).share());
 		result = when_all(futures.begin(), futures.end()).then([](auto fut)
 		{
 			REQUIRE(fut.is_ready());
@@ -302,13 +301,13 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 			REQUIRE(vec_ints.front() == 100);
 			REQUIRE(vec_ints.back() == 101);
 			return true;
-		}, exe2.get());
+		}, &exe2);
 	}
 	
 	REQUIRE(result.get());
 	
-	exe1->Quit();
-	exe2->Quit();
+	exe1.Quit();
+	exe2.Quit();
 	thread1.join();
 	thread2.join();
 }
@@ -317,17 +316,17 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 TEST_CASE("future<void>::then()", "[normal]")
 {
 	using namespace std::chrono_literals;
-	auto exe = QueueExecutor::New();
-	auto thread = exe->Spawn();
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
 	
 	bool run{false};
 	
-	auto fut = async([]{std::this_thread::sleep_for(100ms);}, exe.get());
+	auto fut = async([]{std::this_thread::sleep_for(100ms);}, &exe);
 	fut.then([&run](future<void>){
 		run = true;
 	}).wait();
 	
-	exe->Quit();
+	exe.Quit();
 	thread.join();
 	
 	REQUIRE(run);
@@ -336,12 +335,12 @@ TEST_CASE("future<void>::then()", "[normal]")
 TEST_CASE("test shared_future::then()", "[normal]")
 {
 	using namespace std::chrono_literals;
-	auto exe = QueueExecutor::New();
-	auto thread = exe->Spawn();
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
 	
 	bool run1{false}, run2{false};
 	
-	auto fut = async([]{std::this_thread::sleep_for(100ms);}, exe.get()).share();
+	auto fut = async([]{std::this_thread::sleep_for(100ms);}, &exe).share();
 	auto copy = fut;
 
 	auto future_cont = fut.then([&run2](auto shut)
@@ -377,18 +376,18 @@ TEST_CASE("test shared_future::then()", "[normal]")
 
 	REQUIRE(run2);
 
-	exe->Quit();
+	exe.Quit();
 	thread.join();
 }
 
 TEST_CASE("test exception in async", "[normal]")
 {
-	auto exe = QueueExecutor::New();
-	auto thread = exe->Spawn();
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
 	
 	bool run1{false}, run2{false};
 	
-	auto fut = async([]{throw -1;}, exe.get());
+	auto fut = async([]{throw -1;}, &exe);
 	SECTION("call then() with a future with an exception")
 	{
 		fut.then([](auto fut)
@@ -401,29 +400,29 @@ TEST_CASE("test exception in async", "[normal]")
 		REQUIRE_THROWS_AS(fut.get(), int&);
 	}
 	
-	exe->Quit();
+	exe.Quit();
 	thread.join();
 }
 
 TEST_CASE( "unwrap future", "[normal]" )
 {
-	auto exe = QueueExecutor::New();
-	auto thread = exe->Spawn();
+	QueueExecutor exe;
+	auto thread = exe.Spawn();
 
-	auto ffi = async([exe]
+	auto ffi = async([&exe]
 	{
 		return async([]
 		{
 			return 100;
-		}, exe.get());
-	}, exe.get());
+		}, &exe);
+	}, &exe);
 	
 	SECTION("then() on the future<future<T>>")
 	{
 		future<int>{std::move(ffi)}.then([](auto f)
 		{
 			REQUIRE(f.get() == 100);
-		}, exe.get()).wait();
+		}, &exe).wait();
 	}
 	SECTION("get() and wait() on the future")
 	{
@@ -431,6 +430,6 @@ TEST_CASE( "unwrap future", "[normal]" )
 		REQUIRE(f.get() == 100);
 	}
 	
-	exe->Quit();
+	exe.Quit();
 	thread.join();
 }
