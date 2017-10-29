@@ -22,13 +22,13 @@ TEST_CASE("executors in future and promise")
 {
 	auto exe = QueueExecutor::New();
 	
-	promise<void> subject{exe};
+	promise<void> subject{exe.get()};
 	auto future = subject.get_future();
 	
-	REQUIRE(future.ExecutorToUse() == exe);
+	REQUIRE(future.ExecutorToUse() == exe.get());
 	
 	auto shared_future = future.share();
-	REQUIRE(shared_future.ExecutorToUse() == exe);
+	REQUIRE(shared_future.ExecutorToUse() == exe.get());
 }
 
 TEST_CASE("then() without specifying an executor")
@@ -55,7 +55,7 @@ TEST_CASE("then() without specifying an executor")
 	// executor as the async task that produce the future.
 	auto then_fut = fi.then([tid, &run, exe](auto fut)
 	{
-		REQUIRE(fut.ExecutorToUse() == exe);
+		REQUIRE(fut.ExecutorToUse() == exe.get());
 		REQUIRE(std::this_thread::get_id() == tid);
 		run = true;
 	});
@@ -156,14 +156,14 @@ TEST_CASE( "Simple async multithread case", "[normal]" )
 	
 	fut.then([tids, exe](future<int> val)
 	{
-		REQUIRE(val.ExecutorToUse() == exe);
+		REQUIRE(val.ExecutorToUse() == exe.get());
 		REQUIRE(val.is_ready());
 		REQUIRE(val.get() == 100);
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
 		return std::string{"abc"};
 	}).then([tids, exe](future<std::string> s)
 	{
-		REQUIRE(s.ExecutorToUse() == exe);
+		REQUIRE(s.ExecutorToUse() == exe.get());
 		REQUIRE(s.is_ready());
 		REQUIRE(s.get() == "abc");
 		REQUIRE_THAT(tids, VectorContains(std::this_thread::get_id()));
