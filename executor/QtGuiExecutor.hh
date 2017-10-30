@@ -40,13 +40,10 @@ private:
 		Func m_func;
 	};
 
-	QtGuiExecutor() = default;
-	friend Executor* TheQtGuiExecutor();
+	friend Executor& TheQtGuiExecutor();
 	
-	struct Private {};
-
 public:
-	explicit QtGuiExecutor(Private) : QtGuiExecutor{} {}
+	QtGuiExecutor() = default;
 	
 	template <typename Func>
 	static void PostMain(Func&& func, QObject *dest = qApp)
@@ -61,10 +58,10 @@ public:
 	}
 };
 
-inline Executor* TheQtGuiExecutor()
+inline Executor& TheQtGuiExecutor()
 {
-	static auto inst = std::make_shared<QtGuiExecutor>(QtGuiExecutor::Private{});
-	return inst.get();
+	static QtGuiExecutor inst;
+	return inst;
 }
 
 } // end of namespace
