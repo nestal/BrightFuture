@@ -4,6 +4,7 @@ project(BrightFuture)
 set(CMAKE_CXX_STANDARD 14)
 
 find_package(Threads REQUIRED)
+find_package(Boost COMPONENTS system)
 find_package(Doxygen)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -11,12 +12,21 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 set(SOURCE_FILES
 	test/main.cc
 	BrightFuture.hh
-	executor/BoostAsioExecutor.hh
 	executor/QtGuiExecutor.hh
 	test/catch.hpp test/LocalTest.cc
 )
+
+set(EXTRA_LIB)
+if(Boost_FOUND)
+	list(APPEND SOURCE_FILES
+		executor/BoostAsioExecutor.hh
+		executor/BoostAsioExecutor.cc
+	)
+	list(APPEND EXTRA_LIB Boost::system)
+endif()
+
 add_executable(BrightFuture ${SOURCE_FILES})
-target_link_libraries(BrightFuture Threads::Threads)
+target_link_libraries(BrightFuture Threads::Threads ${EXTRA_LIB})
 
 # documentations
 if (DOXYGEN_FOUND)

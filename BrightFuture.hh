@@ -47,7 +47,7 @@ using TaskPointer = std::shared_ptr<TaskBase>;
 /// The Executor serves two purposes: to schedule callback functions and to execute them.
 /// This is the abstract interface of an Executor. It's to be used with a Token.
 ///
-class Executor : public std::enable_shared_from_this<Executor>
+class Executor
 {
 public:
 	virtual ~Executor() = default;
@@ -55,7 +55,14 @@ public:
 	virtual Token Add(TaskPointer&& task) = 0;
 	virtual void Schedule(Token token) = 0;
 };
-using ExecutorPointer = std::shared_ptr<Executor>;
+
+///
+/// Default executor to be used if none is specified.
+///
+/// Don't rely too much on the default executor, because it is shared by all threads. It will
+/// become slow when too many threads access it.
+///
+Executor* DefaultExecutor();
 
 ///
 /// A token to represent a task to be called.
@@ -128,9 +135,9 @@ private:
 	FutureBase& operator=(FutureBase&&) noexcept = default;
 	FutureBase& operator=(const FutureBase&) noexcept = default;
 
-	explicit FutureBase(TokenQueuePtr token, ExecutorPointer&& exe) noexcept :
+	explicit FutureBase(TokenQueuePtr token, Executor* exe) noexcept :
 		m_token{std::move(token)},
-		m_exec{std::move(exe)}
+		m_exec{exe}
 	{
 		assert(m_token);
 		assert(m_exec);
@@ -174,17 +181,18 @@ public:
 	template <typename Func, typename Future>
 	friend auto Async(Func&& function, Future&& fut_arg, Executor *host);
 
-	ExecutorPointer ExecutorToUse(Executor *exec = nullptr) const
+	Executor* ExecutorToUse(Executor *exec = nullptr) const
 	{
-		return exec ? exec->shared_from_this() : m_exec;
+		assert(m_exec);
+		return exec ? exec : m_exec;
 	}
-	
+
 private:
 	auto& SharedState() {return static_cast<Inherited*>(this)->m_shared_state;}
 	const auto& SharedState() const {return static_cast<const Inherited*>(this)->m_shared_state;}
 
 	TokenQueuePtr   m_token{std::make_shared<TokenQueue>()};
-	ExecutorPointer m_exec; //!< Default executor. If no executor is specified in then(), use m_executor.
+	Executor        *m_exec; //!< Default executor. If no executor is specified in then(), use m_executor.
 };
 
 template <typename T>
@@ -203,8 +211,8 @@ public:
 	{
 	}
 
-	shared_future(const std::shared_future<T>& sf, TokenQueuePtr token, ExecutorPointer exec) :
-		Base{std::move(token), std::move(exec)}, m_shared_state{sf}
+	shared_future(const std::shared_future<T>& sf, TokenQueuePtr token, Executor* exec) :
+		Base{std::move(token), exec}, m_shared_state{sf}
 	{
 	}
 
@@ -214,7 +222,7 @@ public:
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, shared_future&&>::value);
 #endif
-		return Async(std::forward<Func>(continuation), shared_future{*this}, host ? host : Base::m_exec.get());
+		return Async(std::forward<Func>(continuation), shared_future{*this}, host ? host : Base::m_exec);
 	}
 
 	template <typename R=T>
@@ -269,8 +277,8 @@ public:
 
 	future(future<future<T>>&& wrapped);
 	
-	future(std::future<T>&& f, TokenQueuePtr token, ExecutorPointer exec) :
-		Base{std::move(token), std::move(exec)}, m_shared_state{std::move(f)}
+	future(std::future<T>&& f, TokenQueuePtr token, Executor* exec) :
+		Base{std::move(token), exec}, m_shared_state{std::move(f)}
 	{
 	}
 
@@ -288,7 +296,7 @@ public:
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, future&&>::value);
 #endif
-		return Async(std::forward<Func>(continuation), std::move(*this), host ? host : Base::m_exec.get());
+		return Async(std::forward<Func>(continuation), std::move(*this), host ? host : Base::m_exec);
 	}
 
 	template <typename R=T>
@@ -353,38 +361,12 @@ private:
 	std::intptr_t m_seq{0};
 };
 
-///
-/// A temporary executor that runs tasks directly in the same thread that schedule them.
-///
-/// It is a tricky executor: it is designed to be used temporarily when no other executor
-/// are available, e.g. when the executor passed to then() is null. Using InlineExecutor
-/// basically means that:
-/// - If the previous async task is not finished, attach the current function to the same
-///   thread as the previous async task.
-/// - If the previous async task has been finished, then run the current function immediately.
-///
-class InlineExecutor : public ExecutorBase<InlineExecutor>
-{
-private:
-	InlineExecutor() = default;
-	struct Private {};
-	
-public:
-	explicit InlineExecutor(Private) : InlineExecutor{} {}
-	static auto New() { return std::make_shared<InlineExecutor>(Private{});}
-	
-	void Post(TaskPointer&& task)
-	{
-		task->Execute();
-	}
-};
-
 template <typename T>
 class promise
 {
 public:
 	promise() = default;
-	explicit promise(ExecutorPointer&& exec) : m_exec{std::move(exec)}
+	explicit promise(Executor *exec) : m_exec{exec}
 	{
 		assert(m_exec);
 	}
@@ -417,7 +399,7 @@ public:
 private:
 	std::promise<T>     m_shared_state;
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
-	ExecutorPointer     m_exec{InlineExecutor::New()};
+	Executor            *m_exec{DefaultExecutor()};
 };
 
 /// \brief Unwrapping constructor for future
@@ -432,13 +414,9 @@ private:
 template <typename T>
 future<T>::future(future<future<T>>&& fut)
 {
-	promise<T> fwd{fut.ExecutorToUse()->shared_from_this()};
+	promise<T> fwd{fut.ExecutorToUse()};
 	*this = fwd.get_future();
 	
-	// It's OK to capture a shared_ptr to InlineExecutor in the callback that is queued to
-	// itself, because the InlineExecutor will not destroy the std::function passed to it
-	// in ExecuteTask(). When the last std::function in the InlineExecutor is destroyed,
-	// the InlineExecutor itself will be freed.
 	fut.then([fwd=std::move(fwd)](future<future<T>> fut) mutable
 	{
 		try
@@ -522,15 +500,36 @@ private:
 	Future          m_arg;          //!< Argument to the function to be called in Execute().
 };
 
+///
+/// A temporary executor that runs tasks directly in the same thread that schedule them.
+///
+/// It is a tricky executor: it is designed to be used temporarily when no other executor
+/// are available, e.g. when the executor passed to then() is null. Using InlineExecutor
+/// basically means that:
+/// - If the previous async task is not finished, attach the current function to the same
+///   thread as the previous async task.
+/// - If the previous async task has been finished, then run the current function immediately.
+///
+class InlineExecutor : public ExecutorBase<InlineExecutor>
+{
+public:
+	InlineExecutor() = default;
+	void Post(TaskPointer&& task)
+	{
+		task->Execute();
+	}
+};
+
+inline Executor* DefaultExecutor()
+{
+	static InlineExecutor inst;
+	return &inst;
+}
+
 class QueueExecutor : public ExecutorBase<QueueExecutor>
 {
-private:
-	QueueExecutor() = default;
-	struct Private {};
-	
 public:
-	explicit QueueExecutor(Private) : QueueExecutor{} {}
-	static auto New() { return std::make_shared<QueueExecutor>(Private{});}
+	QueueExecutor() = default;
 	
 	auto Run()
 	{
@@ -597,15 +596,12 @@ template <typename Func, typename Future>
 auto Async(Func&& function, Future&& arg, Executor *host)
 {
 	assert(arg.valid());
-	
+	assert(host);
 //	arg.is_ready();
 	
 	auto token_queue = arg.m_token;
 	assert(token_queue);
 	
-	// If host is null, create an InlineExecutor as an alternative.
-	// We need to capture that InlineExecutor in the task function that will be Add()'ed,
-	// because we need to keep the executor alive until the task function has returned.
 	auto task   = std::make_shared<Task<Future, Func>>(std::forward<Future>(arg), std::forward<Func>(function), host);
 	auto result = task->GetResult();
 	auto token = host->Add(std::move(task));
@@ -661,7 +657,7 @@ auto async(Func&& func, Executor *exe)
 	assert(exe);
 	
 	// The argument to func is already ready, because there is none.
-	promise<void> arg{exe->shared_from_this()};
+	promise<void> arg{exe};
 	arg.set_value();
 
 	return Async(AdaptToUnary<Func>{nullptr, std::forward<Func>(func)}, arg.get_future(), exe);
@@ -671,7 +667,13 @@ template <typename T>
 class IntermediateResultOfWhenAll
 {
 public:
-	explicit IntermediateResultOfWhenAll(std::size_t total) : m_total{total} {}
+	explicit IntermediateResultOfWhenAll(std::size_t total, Executor* exec) :
+		m_promise{exec}, m_total{total}
+	{
+		// If there is no future to wait, Process() will not be called.
+		if (m_total == 0)
+			m_promise.set_value(std::vector<T>());
+	}
 
 	template <typename Future> // Should be future<T> or shared_future<T>
 	void Process(Future&& fut, std::size_t index)
@@ -727,11 +729,16 @@ auto when_all(InputIt first, InputIt last)
 	std::vector<Future> futures;
 	std::move(first, last, std::back_inserter(futures));
 
-	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(futures.size());
-	for (auto i = futures.size()*0 ; i < futures.size(); i++)
-		futures[i].then([intermediate, i](auto&& fut)
+	// Use the executor from the first future for the resultant future.
+	// No particular reason, just pick one.
+	auto intermediate  = std::make_shared<IntermediateResultOfWhenAll<T>>(
+		futures.size(),
+		futures.empty() ? DefaultExecutor() : futures.front().ExecutorToUse()
+	);
+	for (auto&& future : futures)
+		future.then([intermediate, index=&future-&futures.front()](auto&& fut)
 		{
-			intermediate->Process(std::forward<decltype(fut)>(fut), i);
+			intermediate->Process(std::forward<decltype(fut)>(fut), index);
 		});
 	
 	return intermediate->Result();
