@@ -454,7 +454,7 @@ public:
 
 public:
 	Task(Future&& arg, Callable&& func, Executor& exe) :
-		m_return{arg.ExecutorToUse(&exe)},
+		m_return{exe},
 		m_function{std::forward<Callable>(func)},
 		m_arg{std::forward<Future>(arg)}
 	{
