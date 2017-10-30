@@ -387,6 +387,7 @@ public:
 	void set_exception( std::exception_ptr p )
 	{
 		m_shared_state.set_exception(p);
+		m_cont->TryContinue();
 	}
 	
 	template <typename T1=T>
@@ -402,7 +403,7 @@ public:
 		m_shared_state.set_value();
 		m_cont->TryContinue();
 	}
-
+	
 private:
 	std::promise<T>     m_shared_state;
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};

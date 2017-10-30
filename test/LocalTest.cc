@@ -404,10 +404,13 @@ TEST_CASE("test exception in async", "[normal]")
 	auto fut = async([]{throw -1;}, exe);
 	SECTION("call then() with a future with an exception")
 	{
-		fut.then([](auto fut)
+		bool run = false;
+		fut.then([&run](auto fut)
 		{
 			REQUIRE_THROWS_AS(fut.get(), int&);
-		});
+			run = true;
+		}).wait();
+		REQUIRE(run);
 	}
 	SECTION("the returned future contains an exception")
 	{
