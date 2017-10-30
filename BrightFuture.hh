@@ -393,7 +393,7 @@ public:
 	template <typename T1=T>
 	typename std::enable_if<!std::is_void<T1>::value>::type set_value(T1&& t)
 	{
-		m_shared_state.set_value(std::move(t));
+		m_shared_state.set_value(std::forward<T1>(t));
 		m_cont->TryContinue();
 	}
 

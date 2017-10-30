@@ -31,6 +31,17 @@ TEST_CASE("default future is invalid", "[normal]")
 	REQUIRE_THROWS_AS(shut.then(dont_care), std::future_error);
 }
 
+TEST_CASE("simple usage", "[normal]")
+{
+	const std::string val = "this is a string";
+	promise<std::string> subject;
+	subject.set_value(val);
+	
+	auto fut = subject.get_future();
+	REQUIRE(fut.valid());
+	REQUIRE(fut.get() == val);
+}
+
 TEST_CASE("executors in future and promise", "[normal]")
 {
 	QueueExecutor exe;
