@@ -602,15 +602,13 @@ private:
 template <typename Func, typename Future>
 auto Async(Func&& function, Future&& arg, Executor& host)
 {
-	assert(arg.valid());
-//	arg.is_ready();
-	
 	auto token_queue = arg.m_token;
-	assert(token_queue);
+	if (!token_queue)
+		throw std::future_error{std::future_errc::no_state};
 	
 	auto task   = std::make_shared<Task<Future, Func>>(std::forward<Future>(arg), std::forward<Func>(function), host);
 	auto result = task->GetResult();
-	auto token = host.Add(std::move(task));
+	auto token  = host.Add(std::move(task));
 	
 	// There is a race condition here: whether or not the last async call has finished or not.
 

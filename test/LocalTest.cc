@@ -20,11 +20,15 @@ using namespace Catch::Matchers;
 
 TEST_CASE("default future is invalid", "[normal]")
 {
+	auto dont_care = [](auto fut){};
+	
 	future<void> fut;
 	REQUIRE(!fut.valid());
+	REQUIRE_THROWS_AS(fut.then(dont_care), std::future_error);
 	
 	shared_future<void> shut;
 	REQUIRE(!shut.valid());
+	REQUIRE_THROWS_AS(shut.then(dont_care), std::future_error);
 }
 
 TEST_CASE("executors in future and promise", "[normal]")
@@ -41,7 +45,7 @@ TEST_CASE("executors in future and promise", "[normal]")
 	REQUIRE(!future.valid());
 }
 
-TEST_CASE("then() without specifying an executor")
+TEST_CASE("then() without specifying an executor", "[normal]")
 {
 	using namespace std::chrono_literals;
 	
