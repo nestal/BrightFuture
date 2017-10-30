@@ -122,7 +122,7 @@ TEST_CASE( "Inline executor", "[normal]")
 			REQUIRE(std::this_thread::get_id() == q_tid);
 			REQUIRE(fint.get() == 100);
 			run2 = true;
-		}, &subject);
+		}, subject);
 		
 		// Set ready _after_ calling then() to make sure the continuation routine
 		// is not run inside then().
@@ -240,7 +240,7 @@ TEST_CASE( "Two executors", "[normal]" )
 		REQUIRE(s.get() == "string"s);
 		REQUIRE(std::this_thread::get_id() == tid);
 		run2 = true;
-	}, &exe2).wait();
+	}, exe2).wait();
 	
 	exe1.Quit();
 	exe2.Quit();
@@ -286,7 +286,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 			REQUIRE(vec_ints.front() == 100);
 			REQUIRE(vec_ints.back() == 101);
 			return true;
-		}, &exe2);
+		}, exe2);
 	}
 	SECTION("2 shared_future<int>'s")
 	{
@@ -301,7 +301,7 @@ TEST_CASE( "WhenAll 2 promises", "[normal]" )
 			REQUIRE(vec_ints.front() == 100);
 			REQUIRE(vec_ints.back() == 101);
 			return true;
-		}, &exe2);
+		}, exe2);
 	}
 	
 	REQUIRE(result.get());
@@ -422,7 +422,7 @@ TEST_CASE( "unwrap future", "[normal]" )
 		future<int>{std::move(ffi)}.then([](auto f)
 		{
 			REQUIRE(f.get() == 100);
-		}, &exe).wait();
+		}, exe).wait();
 	}
 	SECTION("get() and wait() on the future")
 	{

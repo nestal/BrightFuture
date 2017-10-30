@@ -217,12 +217,14 @@ public:
 	}
 
 	template <typename Func>
-	auto then(Func&& continuation, Executor *host = nullptr)
+	auto then(Func&& continuation, Executor& host)
 	{
-#if __cplusplus >= 201703L
-		static_assert(std::is_invocable<Func, shared_future&&>::value);
-#endif
-		return Async(std::forward<Func>(continuation), shared_future{*this}, Base::ExecutorToUse(host));
+		return Async(std::forward<Func>(continuation), shared_future{*this}, host);
+	}
+	template <typename Func>
+	auto then(Func&& continuation)
+	{
+		return then(std::forward<Func>(continuation), Base::ExecutorToUse());
 	}
 
 	template <typename R=T>
@@ -291,12 +293,14 @@ public:
 	}
 
 	template <typename Func>
-	auto then(Func&& continuation, Executor *host = nullptr)
+	auto then(Func&& continuation, Executor& host)
 	{
-#if __cplusplus >= 201703L
-		static_assert(std::is_invocable<Func, future&&>::value);
-#endif
-		return Async(std::forward<Func>(continuation), std::move(*this), Base::ExecutorToUse(host));
+		return Async(std::forward<Func>(continuation), std::move(*this), host);
+	}
+	template <typename Func>
+	auto then(Func&& continuation)
+	{
+		return then(std::forward<Func>(continuation), Base::ExecutorToUse());
 	}
 
 	template <typename R=T>
