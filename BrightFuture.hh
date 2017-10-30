@@ -62,7 +62,7 @@ public:
 /// Don't rely too much on the default executor, because it is shared by all threads. It will
 /// become slow when too many threads access it.
 ///
-Executor* DefaultExecutor();
+Executor& DefaultExecutor();
 
 ///
 /// A token to represent a task to be called.
@@ -179,12 +179,12 @@ public:
 	}
 
 	template <typename Func, typename Future>
-	friend auto Async(Func&& function, Future&& fut_arg, Executor *host);
+	friend auto Async(Func&& function, Future&& fut_arg, Executor& host);
 
-	Executor* ExecutorToUse(Executor *exec = nullptr) const
+	Executor& ExecutorToUse(Executor *exec = nullptr) const
 	{
 		assert(m_exec);
-		return exec ? exec : m_exec;
+		return exec ? *exec : *m_exec;
 	}
 
 private:
@@ -192,7 +192,7 @@ private:
 	const auto& SharedState() const {return static_cast<const Inherited*>(this)->m_shared_state;}
 
 	TokenQueuePtr   m_token{std::make_shared<TokenQueue>()};
-	Executor        *m_exec; //!< Default executor. If no executor is specified in then(), use m_executor.
+	Executor        *m_exec{&DefaultExecutor()}; //!< Default executor. If no executor is specified in then(), use m_executor.
 };
 
 template <typename T>
@@ -222,7 +222,7 @@ public:
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, shared_future&&>::value);
 #endif
-		return Async(std::forward<Func>(continuation), shared_future{*this}, host ? host : Base::m_exec);
+		return Async(std::forward<Func>(continuation), shared_future{*this}, Base::ExecutorToUse(host));
 	}
 
 	template <typename R=T>
@@ -296,7 +296,7 @@ public:
 #if __cplusplus >= 201703L
 		static_assert(std::is_invocable<Func, future&&>::value);
 #endif
-		return Async(std::forward<Func>(continuation), std::move(*this), host ? host : Base::m_exec);
+		return Async(std::forward<Func>(continuation), std::move(*this), Base::ExecutorToUse(host));
 	}
 
 	template <typename R=T>
@@ -366,10 +366,13 @@ class promise
 {
 public:
 	promise() = default;
-	explicit promise(Executor *exec) : m_exec{exec}
+	explicit promise(Executor& exec) : m_exec{&exec}
 	{
-		assert(m_exec);
 	}
+	promise(promise&&) = default;
+	promise(const promise&) = delete;
+	promise& operator=(promise&&) = default;
+	promise& operator==(const promise&) = delete;
 
 	auto get_future()
 	{
@@ -450,8 +453,8 @@ public:
 	using Ret = typename std::result_of<Callable(Future&&)>::type;
 
 public:
-	Task(Future&& arg, Callable&& func, Executor *exe) :
-		m_return{arg.ExecutorToUse(exe)},
+	Task(Future&& arg, Callable&& func, Executor& exe) :
+		m_return{arg.ExecutorToUse(&exe)},
 		m_function{std::forward<Callable>(func)},
 		m_arg{std::forward<Future>(arg)}
 	{
@@ -520,10 +523,10 @@ public:
 	}
 };
 
-inline Executor* DefaultExecutor()
+inline Executor& DefaultExecutor()
 {
 	static InlineExecutor inst;
-	return &inst;
+	return inst;
 }
 
 class QueueExecutor : public ExecutorBase<QueueExecutor>
@@ -593,10 +596,9 @@ private:
 };
 
 template <typename Func, typename Future>
-auto Async(Func&& function, Future&& arg, Executor *host)
+auto Async(Func&& function, Future&& arg, Executor& host)
 {
 	assert(arg.valid());
-	assert(host);
 //	arg.is_ready();
 	
 	auto token_queue = arg.m_token;
@@ -604,7 +606,7 @@ auto Async(Func&& function, Future&& arg, Executor *host)
 	
 	auto task   = std::make_shared<Task<Future, Func>>(std::forward<Future>(arg), std::forward<Func>(function), host);
 	auto result = task->GetResult();
-	auto token = host->Add(std::move(task));
+	auto token = host.Add(std::move(task));
 	
 	// There is a race condition here: whether or not the last async call has finished or not.
 
@@ -616,7 +618,7 @@ auto Async(Func&& function, Future&& arg, Executor *host)
 	// and the token is added to the queue. In this case the token will be Scheduled()
 	// by the async call when it finishes. We don't need to call Schedule() ourselves.
 	if (!token_queue->PushBack(token))
-		host->Schedule(token);
+		host.Schedule(token);
 
 	return result;
 }
@@ -652,10 +654,8 @@ public:
 /// \param exe      The executor to invoke the function.
 /// \return         A future to the return value of func().
 template <typename Func>
-auto async(Func&& func, Executor *exe)
+auto async(Func&& func, Executor& exe)
 {
-	assert(exe);
-	
 	// The argument to func is already ready, because there is none.
 	promise<void> arg{exe};
 	arg.set_value();
@@ -667,7 +667,7 @@ template <typename T>
 class IntermediateResultOfWhenAll
 {
 public:
-	explicit IntermediateResultOfWhenAll(std::size_t total, Executor* exec) :
+	explicit IntermediateResultOfWhenAll(std::size_t total, Executor& exec) :
 		m_promise{exec}, m_total{total}
 	{
 		// If there is no future to wait, Process() will not be called.

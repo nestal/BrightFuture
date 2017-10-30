@@ -3,6 +3,12 @@ project(BrightFuture)
 
 set(CMAKE_CXX_STANDARD 14)
 
+if (WIN32)
+	set(Boost_USE_STATIC_LIBS        ON) # only find static libs
+	set(Boost_USE_MULTITHREADED      ON)
+	set(Boost_USE_STATIC_RUNTIME    OFF)
+endif()
+
 find_package(Threads REQUIRED)
 find_package(Boost COMPONENTS system)
 find_package(Doxygen)
@@ -22,7 +28,7 @@ if(Boost_FOUND)
 		executor/BoostAsioExecutor.hh
 		executor/BoostAsioExecutor.cc
 	)
-	list(APPEND EXTRA_LIB Boost::system)
+	list(APPEND EXTRA_LIB Boost::disable_autolinking Boost::system)
 endif()
 
 add_executable(BrightFuture ${SOURCE_FILES})
