@@ -181,17 +181,17 @@ public:
 	template <typename Func, typename Future>
 	friend auto Async(Func&& function, Future&& fut_arg, Executor& host);
 
-	Executor& ExecutorToUse(Executor *exec = nullptr) const
+	Executor& ExecutorToUse() const
 	{
 		assert(m_exec);
-		return exec ? *exec : *m_exec;
+		return *m_exec;
 	}
 
 private:
 	auto& SharedState() {return static_cast<Inherited*>(this)->m_shared_state;}
 	const auto& SharedState() const {return static_cast<const Inherited*>(this)->m_shared_state;}
 
-	TokenQueuePtr   m_token{std::make_shared<TokenQueue>()};
+	TokenQueuePtr   m_token;
 	Executor        *m_exec{&DefaultExecutor()}; //!< Default executor. If no executor is specified in then(), use m_executor.
 };
 
@@ -286,10 +286,10 @@ public:
 
 	/// Convert a future to a shared_future.
 	///
-	///
+	/// The future will become invalid afterwards.
 	auto share()
 	{
-		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token), std::move(Base::m_exec)};
+		return shared_future<T>{m_shared_state.share(), std::move(Base::m_token), Base::m_exec};
 	}
 
 	template <typename Func>

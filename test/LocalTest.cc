@@ -18,7 +18,16 @@
 using namespace BrightFuture;
 using namespace Catch::Matchers;
 
-TEST_CASE("executors in future and promise")
+TEST_CASE("default future is invalid", "[normal]")
+{
+	future<void> fut;
+	REQUIRE(!fut.valid());
+	
+	shared_future<void> shut;
+	REQUIRE(!shut.valid());
+}
+
+TEST_CASE("executors in future and promise", "[normal]")
 {
 	QueueExecutor exe;
 	
@@ -29,6 +38,7 @@ TEST_CASE("executors in future and promise")
 	
 	auto shared_future = future.share();
 	REQUIRE(&shared_future.ExecutorToUse() == &exe);
+	REQUIRE(!future.valid());
 }
 
 TEST_CASE("then() without specifying an executor")
