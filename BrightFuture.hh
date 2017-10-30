@@ -402,7 +402,7 @@ public:
 private:
 	std::promise<T>     m_shared_state;
 	TokenQueuePtr       m_cont{std::make_shared<TokenQueue>()};
-	Executor            *m_exec{DefaultExecutor()};
+	Executor            *m_exec{&DefaultExecutor()};
 };
 
 /// \brief Unwrapping constructor for future
