@@ -429,8 +429,6 @@ future<T>::future(future<future<T>>&& fut)
 	{
 		try
 		{
-			// Although we don't need the executor in this lambda, we need to keep it
-			// captured, otherwise the shared_ptr will destroy the executor.
 			fut.get().then([fwd=std::move(fwd)](future<T> fut_get) mutable
 			{
 				try
