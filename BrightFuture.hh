@@ -448,6 +448,21 @@ future<T>::future(future<future<T>>&& fut)
 	});
 }
 
+template <typename T>
+auto make_ready_future(T&& value)
+{
+	promise<typename std::remove_reference<T>::type> p;
+	p.set_value(std::forward<T>(value));
+	return p.get_future();
+}
+
+inline future<void> make_ready_future()
+{
+	promise<void> p;
+	p.set_value();
+	return p.get_future();
+}
+
 template <typename Future, typename Callable>
 class Task : public TaskBase
 {
